@@ -1,5 +1,7 @@
 using System.Net.WebSockets;
+using System.Text.Json;
 using Microsoft.Extensions.Options;
+using ZEIage.Models;
 using ZEIage.Models.ElevenLabs;
 
 namespace ZEIage.Services
@@ -35,16 +37,6 @@ namespace ZEIage.Services
     }
 
     /// <summary>
-    /// Settings required for ElevenLabs integration
-    /// </summary>
-    public class ElevenLabsSettings
-    {
-        public required string BaseUrl { get; set; }  // Base URL for ElevenLabs API
-        public required string ApiKey { get; set; }   // API key for authentication
-        public required string AgentId { get; set; }  // ID of the AI agent to use
-    }
-
-    /// <summary>
     /// Service that handles all interactions with ElevenLabs API
     /// Manages conversation initialization, data retrieval, and WebSocket connections
     /// </summary>
@@ -65,12 +57,24 @@ namespace ZEIage.Services
             IOptions<ElevenLabsSettings> settings, 
             ILogger<ElevenLabsService> logger)
         {
-            _httpClient = httpClient;
-            _settings = settings.Value;
-            _logger = logger;
+            _httpClient = httpClient ?? throw new ArgumentNullException(nameof(httpClient));
+            _logger = logger ?? throw new ArgumentNullException(nameof(logger));
+            _settings = settings?.Value ?? throw new ArgumentNullException(nameof(settings), "ElevenLabs settings are not configured");
 
-            _httpClient.BaseAddress = new Uri(_settings.BaseUrl);
+            // Normalize the base URL
+            var baseUrl = _settings.BaseUrl?.Trim().ToLower() ?? throw new ArgumentException("BaseUrl is required", nameof(settings));
+            if (!baseUrl.StartsWith("http://") && !baseUrl.StartsWith("https://"))
+            {
+                baseUrl = $"https://{baseUrl}";
+            }
+            _httpClient.BaseAddress = new Uri(baseUrl);
+
+            if (string.IsNullOrEmpty(_settings.ApiKey))
+            {
+                throw new ArgumentException("ApiKey is required", nameof(settings));
+            }
             _httpClient.DefaultRequestHeaders.Add("xi-api-key", _settings.ApiKey);
+            _httpClient.DefaultRequestHeaders.Add("Accept", "application/json");
         }
 
         /// <summary>
@@ -90,28 +94,27 @@ namespace ZEIage.Services
                     throw new ArgumentNullException(nameof(variables));
                 }
 
-                string wsUrl;
-                if (_settings.RequireAuthentication)
+                // Make an actual API call to initialize the conversation
+                var request = new
                 {
-                    wsUrl = await GetSignedUrlAsync();
-                    _logger.LogInformation("Got signed WebSocket URL for authenticated connection");
-                }
-                else
-                {
-                    wsUrl = $"wss://api.elevenlabs.io/v1/convai/conversation?agent_id={_settings.AgentId}";
-                }
+                    agent_id = _settings.AgentId,
+                    variables = variables
+                };
 
-                // Validate URL
-                if (!Uri.TryCreate(wsUrl, UriKind.Absolute, out _))
+                var response = await SendRequestAsync<ConversationInitResponse>(
+                    $"/v1/convai/conversation?agent_id={_settings.AgentId}",
+                    HttpMethod.Post,
+                    request);
+
+                if (response == null)
                 {
                     throw new ElevenLabsApiException(
-                        "Invalid WebSocket URL received",
+                        "Failed to initialize conversation",
                         0,
-                        wsUrl);
+                        "Null response from API");
                 }
 
-                _logger.LogInformation("Using WebSocket URL: {Url}", wsUrl);
-                return Guid.NewGuid().ToString();
+                return response.ConversationId;
             }
             catch (Exception ex) when (ex is not ElevenLabsApiException)
             {
@@ -132,7 +135,7 @@ namespace ZEIage.Services
         /// <exception cref="ArgumentOutOfRangeException">When pageSize is invalid</exception>
         /// <exception cref="ElevenLabsApiException">When API request fails</exception>
         public async Task<List<ElevenLabsConversation>> GetConversationsAsync(
-            string agentId = null, 
+            string? agentId = null, 
             int pageSize = 30)
         {
             if (pageSize < 1 || pageSize > 100)
@@ -152,30 +155,27 @@ namespace ZEIage.Services
 
         /// <summary>
         /// Gets detailed data for a specific conversation
-        /// Includes transcript, analysis, and collected variables
         /// </summary>
-        /// <param name="conversationId">ID of the conversation to retrieve</param>
-        /// <returns>Detailed conversation data</returns>
-        /// <exception cref="ArgumentNullException">When conversationId is null or empty</exception>
-        /// <exception cref="ElevenLabsApiException">When API request fails</exception>
-        public async Task<ElevenLabsConversation> GetConversationDetailsAsync(string conversationId)
+        public async Task<ElevenLabsConversation> GetConversationDetailsAsync(
+            string conversationId,
+            CancellationToken cancellationToken = default)
         {
             if (string.IsNullOrEmpty(conversationId))
             {
                 throw new ArgumentNullException(nameof(conversationId));
             }
 
-            return await SendRequestAsync<ElevenLabsConversation>($"/v1/convai/conversations/{conversationId}");
+            return await SendRequestAsync<ElevenLabsConversation>(
+                $"/v1/convai/conversation/{conversationId}",
+                HttpMethod.Get,
+                null,
+                cancellationToken);
         }
 
         /// <summary>
         /// Gets a signed URL for authenticated agent access
-        /// Required when RequireAuthentication is enabled
         /// </summary>
-        /// <returns>Signed WebSocket URL</returns>
-        /// <exception cref="InvalidOperationException">When AgentId is missing</exception>
-        /// <exception cref="ElevenLabsApiException">When API request fails</exception>
-        private async Task<string> GetSignedUrlAsync()
+        public async Task<string> GetSignedUrlAsync()
         {
             if (string.IsNullOrEmpty(_settings.AgentId))
             {
@@ -185,10 +185,16 @@ namespace ZEIage.Services
             var response = await SendRequestAsync<SignedUrlResponse>(
                 $"/v1/convai/conversation/get_signed_url?agent_id={_settings.AgentId}");
             
-            return response?.SignedUrl ?? throw new ElevenLabsApiException(
-                "No signed URL in response",
-                0,
-                "Empty signed_url field");
+            if (response?.SignedUrl == null)
+            {
+                throw new ElevenLabsApiException(
+                    "No signed URL in response",
+                    0,
+                    "Empty signed_url field");
+            }
+
+            _logger.LogInformation("Retrieved signed WebSocket URL for agent {AgentId}", _settings.AgentId);
+            return response.SignedUrl;
         }
 
         /// <summary>
@@ -198,9 +204,14 @@ namespace ZEIage.Services
         /// <param name="endpoint">API endpoint to call</param>
         /// <param name="method">HTTP method (defaults to GET)</param>
         /// <param name="data">Optional request body for POST requests</param>
+        /// <param name="cancellationToken">Cancellation token</param>
         /// <returns>Deserialized response data</returns>
         /// <exception cref="ElevenLabsApiException">When request fails or response is invalid</exception>
-        private async Task<T> SendRequestAsync<T>(string endpoint, HttpMethod method = null, object data = null)
+        private async Task<T> SendRequestAsync<T>(
+            string endpoint, 
+            HttpMethod? method = null, 
+            object? data = null,
+            CancellationToken cancellationToken = default)
         {
             try
             {
@@ -209,15 +220,15 @@ namespace ZEIage.Services
 
                 if (method == HttpMethod.Get)
                 {
-                    response = await _httpClient.GetAsync(endpoint);
+                    response = await _httpClient.GetAsync(endpoint, cancellationToken);
                 }
                 else
                 {
                     var content = data != null ? JsonContent.Create(data) : null;
-                    response = await _httpClient.PostAsync(endpoint, content);
+                    response = await _httpClient.PostAsync(endpoint, content, cancellationToken);
                 }
 
-                var responseContent = await response.Content.ReadAsStringAsync();
+                var responseContent = await response.Content.ReadAsStringAsync(cancellationToken);
                 
                 if (!response.IsSuccessStatusCode)
                 {
@@ -237,7 +248,7 @@ namespace ZEIage.Services
 
                 try
                 {
-                    return await response.Content.ReadFromJsonAsync<T>();
+                    return await response.Content.ReadFromJsonAsync<T>(cancellationToken: cancellationToken);
                 }
                 catch (JsonException ex)
                 {
@@ -266,6 +277,60 @@ namespace ZEIage.Services
                     "Unexpected error calling ElevenLabs API",
                     0,
                     ex.Message);
+            }
+        }
+
+        /// <summary>
+        /// Creates a WebSocket connection to ElevenLabs for real-time audio streaming
+        /// </summary>
+        public async Task<WebSocket> ConnectWebSocket(string? conversationId = null, Dictionary<string, string>? variables = null)
+        {
+            try
+            {
+                // Create WebSocket client with proper options
+                var ws = new ClientWebSocket();
+                ws.Options.KeepAliveInterval = TimeSpan.FromSeconds(30);
+                ws.Options.SetRequestHeader("xi-api-key", _settings.ApiKey);
+
+                // Build WebSocket URL
+                var wsUrl = $"wss://api.elevenlabs.io/v1/convai/conversation?agent_id={_settings.AgentId}";
+                if (!string.IsNullOrEmpty(conversationId))
+                {
+                    wsUrl += $"&conversation_id={conversationId}";
+                }
+
+                // Connect to WebSocket
+                await ws.ConnectAsync(new Uri(wsUrl), CancellationToken.None);
+                _logger.LogInformation("Connected to ElevenLabs WebSocket");
+
+                // Send initial variables if provided
+                if (variables != null && variables.Count > 0)
+                {
+                    var initMessage = new { type = "conversation_init", variables };
+                    var initMessageJson = JsonSerializer.Serialize(initMessage);
+                    var initMessageBytes = System.Text.Encoding.UTF8.GetBytes(initMessageJson);
+                    
+                    await ws.SendAsync(
+                        new ArraySegment<byte>(initMessageBytes),
+                        WebSocketMessageType.Text,
+                        true,
+                        CancellationToken.None);
+
+                    _logger.LogInformation("Sent initial variables to ElevenLabs WebSocket");
+
+                    // Wait for metadata response
+                    var buffer = new byte[4096];
+                    var result = await ws.ReceiveAsync(new ArraySegment<byte>(buffer), CancellationToken.None);
+                    var response = System.Text.Encoding.UTF8.GetString(buffer, 0, result.Count);
+                    _logger.LogInformation("Received WebSocket response: {Response}", response);
+                }
+
+                return ws;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error connecting to ElevenLabs WebSocket");
+                throw;
             }
         }
     }

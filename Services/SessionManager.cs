@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using Microsoft.Extensions.Logging;
 using ZEIage.Models;
 
@@ -8,7 +9,7 @@ namespace ZEIage.Services
     /// </summary>
     public class SessionManager
     {
-        private readonly Dictionary<string, CallSession> _sessions = new();
+        private readonly ConcurrentDictionary<string, CallSession> _sessions = new();
         private readonly ILogger<SessionManager> _logger;
 
         public SessionManager(ILogger<SessionManager> logger)
@@ -17,43 +18,45 @@ namespace ZEIage.Services
         }
 
         /// <summary>
-        /// Creates a new call session with initial state
+        /// Creates a new call session
         /// </summary>
-        public CallSession CreateSession(string phoneNumber, Dictionary<string, string> variables)
+        public CallSession CreateSession(string sessionId, string phoneNumber)
         {
             var session = new CallSession
             {
-                SessionId = Guid.NewGuid().ToString(),
+                SessionId = sessionId,
                 PhoneNumber = phoneNumber,
-                State = CallSessionState.Initializing,
-                StartTime = DateTime.UtcNow,
-                Variables = variables,
-                CallId = string.Empty,
-                ConversationId = string.Empty
+                State = CallSessionState.Created,
+                StartTime = DateTime.UtcNow
             };
 
-            _sessions[session.SessionId] = session;
-            _logger.LogInformation("Created new session {SessionId} for {PhoneNumber}", 
-                session.SessionId, phoneNumber);
-            
+            if (!_sessions.TryAdd(sessionId, session))
+            {
+                throw new InvalidOperationException($"Session {sessionId} already exists");
+            }
+
+            _logger.LogInformation("Created session {SessionId} for {PhoneNumber}", sessionId, phoneNumber);
             return session;
         }
 
         /// <summary>
-        /// Updates an existing session's state
+        /// Updates an existing session
         /// </summary>
         public void UpdateSession(string sessionId, Action<CallSession> updateAction)
         {
             if (_sessions.TryGetValue(sessionId, out var session))
             {
                 updateAction(session);
-                _logger.LogInformation("Updated session {SessionId}, new state: {State}", 
-                    sessionId, session.State);
+                _logger.LogDebug("Updated session {SessionId}", sessionId);
+            }
+            else
+            {
+                _logger.LogWarning("Session {SessionId} not found for update", sessionId);
             }
         }
 
         /// <summary>
-        /// Retrieves a session by its ID
+        /// Gets a session by its ID
         /// </summary>
         public CallSession? GetSession(string sessionId)
         {
@@ -61,7 +64,7 @@ namespace ZEIage.Services
         }
 
         /// <summary>
-        /// Finds a session by its associated call ID
+        /// Gets a session by its associated call ID
         /// </summary>
         public CallSession? GetSessionByCallId(string callId)
         {
@@ -69,17 +72,23 @@ namespace ZEIage.Services
         }
 
         /// <summary>
-        /// Ends a session and records its duration
+        /// Gets all sessions
+        /// </summary>
+        public IEnumerable<CallSession> GetAllSessions()
+        {
+            return _sessions.Values.ToList();
+        }
+
+        /// <summary>
+        /// Ends a session and calculates its duration
         /// </summary>
         public void EndSession(string sessionId)
         {
-            if (_sessions.TryGetValue(sessionId, out var session))
+            if (_sessions.TryRemove(sessionId, out var session))
             {
-                session.State = CallSessionState.Finished;
                 session.EndTime = DateTime.UtcNow;
-                _logger.LogInformation("Ended session {SessionId}, duration: {Duration}s", 
-                    sessionId, (session.EndTime - session.StartTime).Value.TotalSeconds);
-                _sessions.Remove(sessionId);
+                session.State = CallSessionState.Ended;
+                _logger.LogInformation("Ended session {SessionId}", sessionId);
             }
         }
     }

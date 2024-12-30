@@ -1,203 +1,108 @@
 using System.Net.WebSockets;
-using System.Text.Json;
+using Microsoft.Extensions.Logging;
 
-/// <summary>
-/// Handles bidirectional WebSocket communication between Infobip and ElevenLabs
-/// Manages audio streaming and message processing
-/// </summary>
-public class InfobipWebSocketHandler : IDisposable
+namespace ZEIage.WebSockets
 {
-    private readonly WebSocket _infobipWebSocket;
-    private readonly ClientWebSocket _elevenLabsWebSocket;
-    private readonly ILogger<InfobipWebSocketHandler> _logger;
-    private readonly byte[] _buffer = new byte[8192]; // 8KB buffer for audio
-    private string? _conversationId;
-    private bool _isConnected;
-    private readonly CancellationTokenSource _cts = new CancellationTokenSource();
-
-    public InfobipWebSocketHandler(
-        WebSocket infobipWebSocket, 
-        ClientWebSocket elevenLabsWebSocket,
-        ILogger<InfobipWebSocketHandler> logger)
-    {
-        _infobipWebSocket = infobipWebSocket;
-        _elevenLabsWebSocket = elevenLabsWebSocket;
-        _logger = logger;
-    }
-
     /// <summary>
-    /// Main method that handles the WebSocket connection lifecycle
-    /// Starts parallel tasks for handling messages from both services
+    /// Handles WebSocket connections between Infobip and ElevenLabs
     /// </summary>
-    public async Task HandleConnection()
+    public class InfobipWebSocketHandler
     {
-        try
-        {
-            // Start parallel tasks for handling messages
-            var elevenLabsTask = HandleElevenLabsMessages();
-            var infobipTask = HandleInfobipMessages();
+        private readonly WebSocket _infobipWebSocket;
+        private readonly WebSocket _elevenLabsWebSocket;
+        private readonly ILogger _logger;
+        private const int BufferSize = 4096; // 4KB buffer for audio data
 
-            // Wait for either connection to end
-            await Task.WhenAny(elevenLabsTask, infobipTask);
-        }
-        catch (Exception ex)
+        public InfobipWebSocketHandler(
+            WebSocket infobipWebSocket,
+            WebSocket elevenLabsWebSocket,
+            ILogger logger)
         {
-            _logger.LogError(ex, "Error in WebSocket connection");
+            _infobipWebSocket = infobipWebSocket;
+            _elevenLabsWebSocket = elevenLabsWebSocket;
+            _logger = logger;
         }
-    }
 
-    /// <summary>
-    /// Handles incoming messages from Infobip
-    /// Forwards audio data to ElevenLabs
-    /// </summary>
-    private async Task HandleInfobipMessages()
-    {
-        try
+        /// <summary>
+        /// Handles the bidirectional WebSocket connection
+        /// </summary>
+        public async Task HandleConnection()
         {
-            while (_infobipWebSocket.State == WebSocketState.Open && !_cts.Token.IsCancellationRequested)
+            try
             {
-                var result = await _infobipWebSocket.ReceiveAsync(
-                    new ArraySegment<byte>(_buffer), _cts.Token);
+                // Start processing audio in both directions
+                await Task.WhenAll(
+                    ProcessInfobipToElevenLabs(),
+                    ProcessElevenLabsToInfobip()
+                );
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error handling WebSocket connection");
+                throw;
+            }
+        }
 
-                if (result.MessageType == WebSocketMessageType.Binary)
+        private async Task ProcessInfobipToElevenLabs()
+        {
+            var buffer = new byte[BufferSize];
+            try
+            {
+                while (_infobipWebSocket.State == WebSocketState.Open && 
+                       _elevenLabsWebSocket.State == WebSocketState.Open)
                 {
-                    // Forward audio to ElevenLabs
-                    if (_elevenLabsWebSocket.State == WebSocketState.Open)
+                    var result = await _infobipWebSocket.ReceiveAsync(
+                        new ArraySegment<byte>(buffer), CancellationToken.None);
+
+                    if (result.MessageType == WebSocketMessageType.Close)
+                        break;
+
+                    if (result.Count > 0)
                     {
-                        // Convert audio to base64 and wrap in JSON
-                        var message = new
-                        {
-                            user_audio_chunk = Convert.ToBase64String(_buffer, 0, result.Count)
-                        };
-                        
-                        var json = JsonSerializer.Serialize(message);
-                        var bytes = System.Text.Encoding.UTF8.GetBytes(json);
                         await _elevenLabsWebSocket.SendAsync(
-                            new ArraySegment<byte>(bytes), 
-                            WebSocketMessageType.Text,
+                            new ArraySegment<byte>(buffer, 0, result.Count),
+                            WebSocketMessageType.Binary,
                             true,
-                            _cts.Token);
+                            CancellationToken.None);
                     }
                 }
-                else if (result.MessageType == WebSocketMessageType.Close)
-                {
-                    await HandleCloseConnection();
-                    break;
-                }
             }
-        }
-        catch (Exception ex)
-        {
-            _logger.LogError(ex, "Error handling Infobip messages");
-            await HandleCloseConnection();
-        }
-    }
-
-    /// <summary>
-    /// Handles incoming messages from ElevenLabs
-    /// Processes different message types and forwards audio to Infobip
-    /// </summary>
-    private async Task HandleElevenLabsMessages()
-    {
-        var buffer = new byte[8192];
-        try
-        {
-            while (_elevenLabsWebSocket.State == WebSocketState.Open && !_cts.Token.IsCancellationRequested)
+            catch (Exception ex)
             {
-                var result = await _elevenLabsWebSocket.ReceiveAsync(
-                    new ArraySegment<byte>(buffer), _cts.Token);
-
-                if (result.MessageType == WebSocketMessageType.Text)
-                {
-                    // Parse and handle JSON messages from ElevenLabs
-                    var json = System.Text.Encoding.UTF8.GetString(buffer, 0, result.Count);
-                    var message = JsonSerializer.Deserialize<Dictionary<string, JsonElement>>(json);
-
-                    if (message != null)
-                    {
-                        await HandleElevenLabsMessage(message);
-                    }
-                }
-                else if (result.MessageType == WebSocketMessageType.Close)
-                {
-                    await HandleCloseConnection();
-                    break;
-                }
+                _logger.LogError(ex, "Error processing Infobip to ElevenLabs audio");
+                throw;
             }
         }
-        catch (Exception ex)
+
+        private async Task ProcessElevenLabsToInfobip()
         {
-            _logger.LogError(ex, "Error handling ElevenLabs messages");
-            await HandleCloseConnection();
-        }
-    }
-
-    /// <summary>
-    /// Processes different types of messages from ElevenLabs
-    /// Handles conversation metadata and ping/pong messages
-    /// </summary>
-    private async Task HandleElevenLabsMessage(Dictionary<string, JsonElement> message)
-    {
-        if (!message.ContainsKey("type"))
-            return;
-
-        var messageType = message["type"].GetString();
-        switch (messageType)
-        {
-            case "conversation_initiation_metadata":
-                // Handle conversation initialization
-                break;
-
-            case "ping":
-                // Respond to ping messages to keep connection alive
-                if (message.ContainsKey("ping_event"))
+            var buffer = new byte[BufferSize];
+            try
+            {
+                while (_elevenLabsWebSocket.State == WebSocketState.Open && 
+                       _infobipWebSocket.State == WebSocketState.Open)
                 {
-                    var pingEvent = message["ping_event"];
-                    var eventId = pingEvent.GetProperty("event_id").GetInt32();
-                    await SendPong(eventId);
+                    var result = await _elevenLabsWebSocket.ReceiveAsync(
+                        new ArraySegment<byte>(buffer), CancellationToken.None);
+
+                    if (result.MessageType == WebSocketMessageType.Close)
+                        break;
+
+                    if (result.Count > 0)
+                    {
+                        await _infobipWebSocket.SendAsync(
+                            new ArraySegment<byte>(buffer, 0, result.Count),
+                            WebSocketMessageType.Binary,
+                            true,
+                            CancellationToken.None);
+                    }
                 }
-                break;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error processing ElevenLabs to Infobip audio");
+                throw;
+            }
         }
-    }
-
-    /// <summary>
-    /// Sends a pong response to ElevenLabs to keep the connection alive
-    /// </summary>
-    private async Task SendPong(int eventId)
-    {
-        var pongMessage = new
-        {
-            type = "pong",
-            event_id = eventId
-        };
-
-        var json = JsonSerializer.Serialize(pongMessage);
-        var bytes = System.Text.Encoding.UTF8.GetBytes(json);
-        await _elevenLabsWebSocket.SendAsync(
-            new ArraySegment<byte>(bytes),
-            WebSocketMessageType.Text,
-            true,
-            _cts.Token);
-    }
-
-    /// <summary>
-    /// Gracefully closes both WebSocket connections
-    /// </summary>
-    private async Task HandleCloseConnection()
-    {
-        _cts.Cancel();
-        
-        if (_infobipWebSocket.State == WebSocketState.Open)
-            await _infobipWebSocket.CloseAsync(WebSocketCloseStatus.NormalClosure, "Closing", CancellationToken.None);
-        
-        if (_elevenLabsWebSocket.State == WebSocketState.Open)
-            await _elevenLabsWebSocket.CloseAsync(WebSocketCloseStatus.NormalClosure, "Closing", CancellationToken.None);
-    }
-
-    public void Dispose()
-    {
-        _cts.Cancel();
-        _cts.Dispose();
-        _elevenLabsWebSocket.Dispose();
     }
 } 

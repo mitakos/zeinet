@@ -126,3 +126,5 @@ Higher-level WebSocket library (Optional): WebSocketSharp or Fleck for more adva
 
 This detailed overview provides a comprehensive and accurate blueprint for your .NET developer to build the conversational AI system. It incorporates all the feedback, clarifies the audio flow, emphasizes the use of WebSockets for raw audio, and provides a solid foundation for a robust and efficient solution. Remember to break down the development into smaller, manageable tasks, write clean and well-documented code, and test thoroughly at each stage. Good luck with your project!
 
+for elevenlbas conversational AI
+https://elevenlabs.io/docs/conversational-ai/api-reference/websocket

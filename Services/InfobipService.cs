@@ -1,153 +1,194 @@
+using System.Net.Http.Headers;
 using System.Net.WebSockets;
-using System.Text;
+using System.Text.Json;
 using Microsoft.Extensions.Options;
-using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.Logging;
 using ZEIage.Models;
 
-namespace ZEIage.Services
+namespace ZEIage.Services;
+
+public class WebSocketConnectionResponse
 {
-    /// <summary>
-    /// Configuration settings for Infobip service
-    /// </summary>
-    public class InfobipSettings
+    public string Status { get; set; } = "CONNECTED";
+    public string WebSocketUrl { get; set; } = string.Empty;
+}
+
+public class InfobipService
+{
+    private readonly HttpClient _httpClient;
+    private readonly InfobipSettings _settings;
+    private readonly ILogger<InfobipService> _logger;
+    private readonly ILoggerFactory _loggerFactory;
+    private readonly Dictionary<string, ClientWebSocket> _activeConnections = new();
+
+    public InfobipService(
+        HttpClient httpClient,
+        IOptions<InfobipSettings> settings,
+        ILogger<InfobipService> logger,
+        ILoggerFactory loggerFactory)
     {
-        public required string BaseUrl { get; set; }
-        public required string ApiKey { get; set; }
-        public required string PhoneNumber { get; set; }
-        public required string ApplicationId { get; set; }
-        public required string CallsConfigurationId { get; set; }
-        public required string WebhookUrl { get; set; }
+        _httpClient = httpClient ?? throw new ArgumentNullException(nameof(httpClient));
+        _logger = logger ?? throw new ArgumentNullException(nameof(logger));
+        _loggerFactory = loggerFactory ?? throw new ArgumentNullException(nameof(loggerFactory));
+        _settings = settings?.Value ?? throw new ArgumentNullException(nameof(settings), "Infobip settings are not configured");
+
+        // Normalize the base URL
+        var baseUrl = _settings.BaseUrl?.Trim().ToLower() ?? throw new ArgumentException("BaseUrl is required", nameof(settings));
+        if (!baseUrl.StartsWith("http://") && !baseUrl.StartsWith("https://"))
+        {
+            baseUrl = $"https://{baseUrl}";
+        }
+        _httpClient.BaseAddress = new Uri(baseUrl);
+
+        if (string.IsNullOrEmpty(_settings.ApiKey))
+        {
+            throw new ArgumentException("ApiKey is required", nameof(settings));
+        }
+        _httpClient.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("App", _settings.ApiKey);
     }
 
-    /// <summary>
-    /// Handles all interactions with Infobip's Voice API
-    /// </summary>
-    public class InfobipService
+    public async Task<string> InitiateCallAsync(string phoneNumber)
     {
-        private readonly HttpClient _httpClient;
-        private readonly InfobipSettings _settings;
-        private readonly ILogger<InfobipService> _logger;
-        private readonly string _webSocketBaseUrl;
-
-        public InfobipService(
-            HttpClient httpClient, 
-            IOptions<InfobipSettings> settings, 
-            ILogger<InfobipService> logger, 
-            IConfiguration configuration)
+        try
         {
-            _httpClient = httpClient;
-            _settings = settings.Value;
-            _logger = logger;
+            var request = new
+            {
+                endpoint = new 
+                { 
+                    type = "PHONE",
+                    phoneNumber 
+                },
+                from = _settings.FromNumber,
+                callsConfigurationId = _settings.CallsConfigurationId,
+                platform = new 
+                {
+                    applicationId = _settings.ApplicationId
+                }
+            };
+
+            _logger.LogInformation("Initiating call with request: {@Request}", request);
+            var response = await _httpClient.PostAsJsonAsync("/calls/1/calls", request);
             
-            // Get the application's base URL for WebSocket
-            _webSocketBaseUrl = configuration["ApplicationUrl"] ?? "localhost:5133";
+            var responseContent = await response.Content.ReadAsStringAsync();
+            _logger.LogInformation("Infobip response: {Response}", responseContent);
+            
+            response.EnsureSuccessStatusCode();
+            var result = await response.Content.ReadFromJsonAsync<InfobipCallResponse>();
+            
+            if (result == null)
+            {
+                _logger.LogError("Failed to parse Infobip response");
+                return string.Empty;
+            }
 
-            // Configure HTTP client
-            _httpClient.BaseAddress = new Uri($"https://{_settings.BaseUrl}");
-            _httpClient.DefaultRequestHeaders.Add("Authorization", $"App {_settings.ApiKey}");
-            _httpClient.DefaultRequestHeaders.Add("Accept", "application/json");
+            if (string.IsNullOrEmpty(result.Id))
+            {
+                _logger.LogError("No ID in Infobip response");
+                return string.Empty;
+            }
+
+            _logger.LogInformation("Call initiated with Infobip ID: {CallId}", result.Id);
+            return result.Id;
         }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Failed to initiate call to {PhoneNumber}", phoneNumber);
+            return string.Empty;
+        }
+    }
 
-        /// <summary>
-        /// Initiates an outbound call to the specified phone number
-        /// </summary>
-        public async Task<string> InitiateCallAsync(string phoneNumber, string sessionId)
+    public async Task<WebSocketConnectionResponse> ConnectToWebSocket(string callId, string sessionId)
+    {
+        try
+        {
+            // First, make the API call to enable media streaming
+            var request = new
+            {
+                audioFormat = new AudioStreamConfig()
+            };
+
+            _logger.LogInformation("Enabling media streaming for call {CallId}", callId);
+            var response = await _httpClient.PostAsJsonAsync($"/calls/1/calls/{callId}/connect", request);
+            var responseContent = await response.Content.ReadAsStringAsync();
+            _logger.LogInformation("Media stream response: {Response}", responseContent);
+            
+            response.EnsureSuccessStatusCode();
+
+            // Create WebSocket URL
+            var wsUrl = $"wss://{_settings.BaseUrl}/calls/1/media/{callId}";
+            _logger.LogInformation("Connecting to WebSocket at {Url}", wsUrl);
+
+            // Create and configure WebSocket client
+            var ws = new ClientWebSocket();
+            ws.Options.SetRequestHeader("Authorization", $"App {_settings.ApiKey}");
+
+            // Connect to Infobip WebSocket
+            await ws.ConnectAsync(new Uri(wsUrl), CancellationToken.None);
+            _logger.LogInformation("WebSocket connected for call {CallId}", callId);
+
+            // Store the connection
+            _activeConnections[callId] = ws;
+
+            return new WebSocketConnectionResponse 
+            { 
+                Status = "CONNECTED",
+                WebSocketUrl = wsUrl
+            };
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Failed to connect WebSocket for call {CallId}", callId);
+            throw;
+        }
+    }
+
+    public async Task DisconnectWebSocket(string callId)
+    {
+        if (_activeConnections.TryGetValue(callId, out var ws))
         {
             try
             {
-                // Prepare call request
-                var request = new
+                if (ws.State == WebSocketState.Open)
                 {
-                    endpoint = new 
-                    { 
-                        type = "PHONE",
-                        phoneNumber = phoneNumber 
-                    },
-                    from = _settings.PhoneNumber,
-                    platform = new
-                    {
-                        applicationId = _settings.ApplicationId
-                    },
-                    callsConfigurationId = _settings.CallsConfigurationId,
-                    customData = new Dictionary<string, string>
-                    {
-                        { "sessionId", sessionId },
-                        { "initiatedAt", DateTime.UtcNow.ToString("o") }
-                    },
-                    notifyUrl = _settings.WebhookUrl
-                };
-
-                _logger.LogInformation("Initiating call with request: {@Request}", request);
-
-                // Send request to Infobip
-                var response = await _httpClient.PostAsJsonAsync("/calls/1/calls", request);
-                var content = await response.Content.ReadAsStringAsync();
-                
-                _logger.LogInformation("Infobip call response: {Content}", content);
-
-                if (!response.IsSuccessStatusCode)
-                {
-                    throw new Exception($"Infobip API error: {response.StatusCode} - {content}");
+                    await ws.CloseAsync(WebSocketCloseStatus.NormalClosure, "Call ended", CancellationToken.None);
                 }
-
-                // Parse response and return call ID
-                var result = await response.Content.ReadFromJsonAsync<InfobipCallResponse>();
-                return result?.Id ?? throw new Exception("Empty response from Infobip");
+                ws.Dispose();
+                _activeConnections.Remove(callId);
+                _logger.LogInformation("WebSocket disconnected for call {CallId}", callId);
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "Error initiating Infobip call");
-                throw;
+                _logger.LogError(ex, "Error disconnecting WebSocket for call {CallId}", callId);
             }
         }
+    }
 
-        /// <summary>
-        /// Establishes WebSocket connection for media streaming
-        /// </summary>
-        public async Task ConnectToWebSocket(string callId)
+    public ClientWebSocket? GetWebSocket(string callId)
+    {
+        return _activeConnections.TryGetValue(callId, out var ws) ? ws : null;
+    }
+
+    public async Task<bool> StartAudioBridgeAsync(string callId, ClientWebSocket elevenLabsSocket)
+    {
+        try
         {
-            try
+            if (!_activeConnections.TryGetValue(callId, out var infobipSocket))
             {
-                // Prepare WebSocket URL
-                var wsUrl = $"wss://{_webSocketBaseUrl}/api/websocket/connect/{callId}";
-                _logger.LogInformation("Connecting call {CallId} to WebSocket at {Url}", callId, wsUrl);
-
-                // Configure media stream request
-                var request = new
-                {
-                    mediaStream = new
-                    {
-                        type = "websocket",
-                        websocket = new
-                        {
-                            url = wsUrl,
-                            audioFormat = new
-                            {
-                                type = "raw",
-                                sampleRate = 8000,
-                                channels = 1,
-                                bitsPerSample = 16
-                            }
-                        }
-                    }
-                };
-
-                // Send request to connect WebSocket
-                var response = await _httpClient.PostAsJsonAsync($"/calls/1/calls/{callId}/connect", request);
-                var content = await response.Content.ReadAsStringAsync();
-                
-                _logger.LogInformation("WebSocket connection response: {Content}", content);
-
-                if (!response.IsSuccessStatusCode)
-                {
-                    throw new Exception($"Failed to connect WebSocket: {response.StatusCode} - {content}");
-                }
+                throw new InvalidOperationException($"No active WebSocket connection for call {callId}");
             }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex, "Error connecting WebSocket for call {CallId}", callId);
-                throw;
-            }
+
+            var audioHandler = new AudioStreamHandler(
+                infobipSocket,
+                elevenLabsSocket,
+                _loggerFactory.CreateLogger<AudioStreamHandler>());
+
+            await audioHandler.StartAudioBridgeAsync();
+            return true;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Failed to start audio bridge for call {CallId}", callId);
+            return false;
         }
     }
 } 

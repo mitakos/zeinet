@@ -1,54 +1,36 @@
-namespace ZEIage.Models
+using ZEIage.Models.ElevenLabs;
+
+namespace ZEIage.Models;
+
+public enum CallSessionState
 {
-    /// <summary>
-    /// Represents an active voice call session
-    /// Contains all information about a call's state and associated data
-    /// </summary>
-    public class CallSession
-    {
-        /// <summary>
-        /// Unique identifier for the session
-        /// </summary>
-        public required string SessionId { get; set; }
+    Created,
+    Calling,
+    Ringing,
+    PreEstablished,
+    Established,
+    MediaChanged,
+    Recording,
+    RecordingFailed,
+    Rejected,
+    Busy,
+    NoAnswer,
+    Failed,
+    Ended
+}
 
-        /// <summary>
-        /// Infobip call identifier
-        /// </summary>
-        public required string CallId { get; set; }
-
-        /// <summary>
-        /// ElevenLabs conversation identifier
-        /// </summary>
-        public required string ConversationId { get; set; }
-
-        /// <summary>
-        /// Phone number of the call recipient
-        /// </summary>
-        public required string PhoneNumber { get; set; }
-
-        /// <summary>
-        /// Current state of the call (see CallSessionState for possible values)
-        /// </summary>
-        public required string State { get; set; }
-
-        /// <summary>
-        /// UTC timestamp when the call started
-        /// </summary>
-        public DateTime StartTime { get; set; }
-
-        /// <summary>
-        /// UTC timestamp when the call ended, null if call is still active
-        /// </summary>
-        public DateTime? EndTime { get; set; }
-
-        /// <summary>
-        /// Variables passed to ElevenLabs for conversation context
-        /// </summary>
-        public Dictionary<string, string> Variables { get; set; } = new();
-
-        /// <summary>
-        /// Additional data collected during the call
-        /// </summary>
-        public Dictionary<string, string> CustomData { get; set; } = new();
-    }
+public class CallSession
+{
+    public string SessionId { get; set; } = string.Empty;
+    public string? CallId { get; set; }
+    public string? ConversationId { get; set; }
+    public string PhoneNumber { get; set; } = string.Empty;
+    public CallSessionState State { get; set; } = CallSessionState.Created;
+    public DateTime StartTime { get; set; } = DateTime.UtcNow;
+    public DateTime? EndTime { get; set; }
+    public Dictionary<string, string> Variables { get; set; } = new();
+    public List<ElevenLabsMessage> Transcript { get; set; } = new();
+    public ElevenLabsMetadata Metadata { get; set; } = new();
+    public ElevenLabsAnalysis Analysis { get; set; } = new();
+    public Dictionary<string, string> CustomData { get; set; } = new();
 } 

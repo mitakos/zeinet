@@ -1,85 +1,87 @@
 using Microsoft.Extensions.Hosting;
+using ZEIage.Models;
 using ZEIage.Models.ElevenLabs;
 
 namespace ZEIage.Services
 {
     /// <summary>
     /// Background service that periodically updates conversation data from ElevenLabs
-    /// Keeps session data synchronized with the latest conversation state
     /// </summary>
     public class ConversationUpdateService : BackgroundService
     {
-        private readonly ElevenLabsService _elevenLabsService;
-        private readonly SessionManager _sessionManager;
         private readonly ILogger<ConversationUpdateService> _logger;
+        private readonly SessionManager _sessionManager;
+        private readonly ElevenLabsService _elevenLabsService;
         private readonly TimeSpan _updateInterval = TimeSpan.FromSeconds(30);
 
-        /// <summary>
-        /// Initializes a new instance of the ConversationUpdateService
-        /// </summary>
-        /// <param name="elevenLabsService">Service for ElevenLabs API interactions</param>
-        /// <param name="sessionManager">Service for managing call sessions</param>
-        /// <param name="logger">Logger for tracking update operations</param>
         public ConversationUpdateService(
-            ElevenLabsService elevenLabsService,
+            ILogger<ConversationUpdateService> logger,
             SessionManager sessionManager,
-            ILogger<ConversationUpdateService> logger)
+            ElevenLabsService elevenLabsService)
         {
-            _elevenLabsService = elevenLabsService;
-            _sessionManager = sessionManager;
             _logger = logger;
+            _sessionManager = sessionManager;
+            _elevenLabsService = elevenLabsService;
         }
 
-        /// <summary>
-        /// Executes the background service
-        /// Periodically fetches updated conversation data for active sessions
-        /// </summary>
-        /// <param name="stoppingToken">Token that signals when the service should stop</param>
         protected override async Task ExecuteAsync(CancellationToken stoppingToken)
         {
             while (!stoppingToken.IsCancellationRequested)
             {
                 try
                 {
-                    var activeSessions = _sessionManager.GetActiveSessions();
-                    foreach (var session in activeSessions)
-                    {
-                        if (!string.IsNullOrEmpty(session.ConversationId))
-                        {
-                            var conversation = await _elevenLabsService.GetConversationDetailsAsync(session.ConversationId);
-                            UpdateSessionWithConversationData(session, conversation);
-                        }
-                    }
+                    await UpdateActiveSessions(stoppingToken);
+                    await Task.Delay(_updateInterval, stoppingToken);
                 }
                 catch (Exception ex)
                 {
-                    _logger.LogError(ex, "Error updating conversation data");
+                    _logger.LogError(ex, "Error updating conversations");
                 }
-
-                await Task.Delay(_updateInterval, stoppingToken);
             }
         }
 
-        /// <summary>
-        /// Updates a session with the latest conversation data from ElevenLabs
-        /// </summary>
-        /// <param name="session">The session to update</param>
-        /// <param name="conversation">New conversation data from ElevenLabs</param>
-        private void UpdateSessionWithConversationData(CallSession session, ElevenLabsConversation conversation)
+        private async Task UpdateActiveSessions(CancellationToken ct)
         {
-            session.Transcript = conversation.Transcript;
-            session.Metadata = conversation.Metadata;
-            session.Analysis = conversation.Analysis;
-            
-            // Update collected variables
-            foreach (var message in conversation.Transcript)
+            var activeSessions = _sessionManager.GetAllSessions()
+                .Where(s => s.State == CallSessionState.Established && !string.IsNullOrEmpty(s.ConversationId));
+
+            foreach (var session in activeSessions)
             {
-                if (message.CollectedVariables != null)
+                try
                 {
-                    foreach (var variable in message.CollectedVariables)
+                    var conversation = await _elevenLabsService.GetConversationDetailsAsync(
+                        session.ConversationId!, 
+                        ct);
+
+                    if (conversation == null)
                     {
-                        session.Variables[variable.Key] = variable.Value;
+                        _logger.LogWarning(
+                            "No conversation details found for session {SessionId}, conversation {ConversationId}",
+                            session.SessionId,
+                            session.ConversationId);
+                        continue;
                     }
+
+                    // Update session with latest conversation data
+                    _sessionManager.UpdateSession(session.SessionId, s =>
+                    {
+                        s.Transcript = conversation.Messages;
+                        s.Variables = conversation.Variables;
+                        s.Metadata = conversation.Metadata;
+                        s.Analysis = conversation.Analysis;
+                    });
+
+                    _logger.LogDebug(
+                        "Updated conversation data for session {SessionId}, conversation {ConversationId}",
+                        session.SessionId,
+                        session.ConversationId);
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogError(ex, 
+                        "Error updating conversation for session {SessionId}, conversation {ConversationId}",
+                        session.SessionId,
+                        session.ConversationId);
                 }
             }
         }

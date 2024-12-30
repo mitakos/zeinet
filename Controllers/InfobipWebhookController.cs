@@ -42,11 +42,19 @@ namespace ZEIage.Controllers
         public async Task<IActionResult> HandleEvent([FromBody] InfobipCallResponse callEvent)
         {
             // Log raw request for debugging
-            _logger.LogInformation("Webhook received raw request: {Request}", 
-                await new StreamReader(Request.Body).ReadToEndAsync());
+            _logger.LogInformation("Webhook received for call {CallId} with state {State}", 
+                callEvent?.Id, callEvent?.State);
+            
             try 
             {
-                _logger.LogInformation("Received webhook event: {@CallEvent}", callEvent);
+                if (callEvent == null || string.IsNullOrEmpty(callEvent.Id))
+                {
+                    _logger.LogWarning("Invalid webhook event received");
+                    return Ok(); // Return OK to prevent retries
+                }
+
+                _logger.LogInformation("Processing webhook event: State={State}, CallId={CallId}", 
+                    callEvent.State, callEvent.Id);
                 
                 // Find associated session for this call
                 var session = _sessionManager.GetSessionByCallId(callEvent.Id);
@@ -94,13 +102,23 @@ namespace ZEIage.Controllers
                         // Attempt WebSocket connection if media streaming is enabled
                         try
                         {
-                            await _infobipService.ConnectToWebSocket(callEvent.Id);
-                            _logger.LogInformation("WebSocket connected successfully for call {CallId}", callEvent.Id);
+                            var mediaStreamResponse = await _infobipService.ConnectToWebSocket(callEvent.Id, session.SessionId);
+                            _logger.LogInformation(
+                                "Media stream connected successfully for call {CallId}. Status: {Status}, WebSocket URL: {Url}", 
+                                callEvent.Id, 
+                                mediaStreamResponse.Status,
+                                mediaStreamResponse.WebSocketUrl);
+
+                            // Store the WebSocket URL in session for reference
+                            _sessionManager.UpdateSession(session.SessionId, s => 
+                                s.CustomData["mediaStreamUrl"] = mediaStreamResponse.WebSocketUrl);
                         }
                         catch (Exception ex) when (ex.Message.Contains("GENERAL_ERROR"))
                         {
-                            _logger.LogWarning("Media streaming appears to be disabled on Infobip side for call {CallId}. Error: {Error}", 
-                                callEvent.Id, ex.Message);
+                            _logger.LogWarning(
+                                "Media streaming appears to be disabled on Infobip side for call {CallId}. Error: {Error}", 
+                                callEvent.Id, 
+                                ex.Message);
                             
                             // Track media streaming status in session
                             _sessionManager.UpdateSession(session.SessionId, s => 
@@ -108,7 +126,7 @@ namespace ZEIage.Controllers
                         }
                         catch (Exception ex)
                         {
-                            _logger.LogError(ex, "Unexpected error connecting WebSocket for call {CallId}", callEvent.Id);
+                            _logger.LogError(ex, "Unexpected error connecting media stream for call {CallId}", callEvent.Id);
                             _sessionManager.UpdateSession(session.SessionId, s => 
                                 s.CustomData["mediaStreamingStatus"] = "CONNECTION_FAILED");
                         }
@@ -123,6 +141,7 @@ namespace ZEIage.Controllers
                     case "CALL_REJECTED":
                         // Recipient actively rejected the call
                         _logger.LogWarning("Call {CallId} was rejected by recipient", callEvent.Id);
+                        await _infobipService.DisconnectWebSocket(callEvent.Id);
                         _sessionManager.UpdateSession(session.SessionId, s => s.State = CallSessionState.Rejected);
                         _sessionManager.EndSession(session.SessionId);
                         break;
@@ -156,13 +175,14 @@ namespace ZEIage.Controllers
                     case "FINISHED":
                         // Call ended normally
                         _logger.LogInformation("Call {CallId} finished normally", callEvent.Id);
+                        await _infobipService.DisconnectWebSocket(callEvent.Id);
                         _sessionManager.EndSession(session.SessionId);
                         break;
 
                     case "FAILED":
                         // Call failed for technical reasons
-                        _logger.LogWarning("Call {CallId} failed with reason: {Reason}", 
-                            callEvent.Id, callEvent.ErrorCode ?? "Unknown");
+                        _logger.LogWarning("Call {CallId} failed", callEvent.Id);
+                        await _infobipService.DisconnectWebSocket(callEvent.Id);
                         _sessionManager.UpdateSession(session.SessionId, s => s.State = CallSessionState.Failed);
                         _sessionManager.EndSession(session.SessionId);
                         break;
