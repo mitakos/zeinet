@@ -37,8 +37,10 @@ namespace ZEIage.Services
     }
 
     /// <summary>
-    /// Service that handles all interactions with ElevenLabs API
-    /// Manages conversation initialization, data retrieval, and WebSocket connections
+    /// Service responsible for all ElevenLabs AI interactions including:
+    /// 1. Conversation initialization and management
+    /// 2. WebSocket connections for real-time audio
+    /// 3. Variable collection and analysis
     /// </summary>
     public class ElevenLabsService
     {
@@ -59,30 +61,17 @@ namespace ZEIage.Services
         {
             _httpClient = httpClient ?? throw new ArgumentNullException(nameof(httpClient));
             _logger = logger ?? throw new ArgumentNullException(nameof(logger));
-            _settings = settings?.Value ?? throw new ArgumentNullException(nameof(settings), "ElevenLabs settings are not configured");
+            _settings = settings?.Value ?? throw new ArgumentNullException(nameof(settings));
 
-            // Normalize the base URL
-            var baseUrl = _settings.BaseUrl?.Trim().ToLower() ?? throw new ArgumentException("BaseUrl is required", nameof(settings));
-            if (!baseUrl.StartsWith("http://") && !baseUrl.StartsWith("https://"))
-            {
-                baseUrl = $"https://{baseUrl}";
-            }
-            _httpClient.BaseAddress = new Uri(baseUrl);
-
-            if (string.IsNullOrEmpty(_settings.ApiKey))
-            {
-                throw new ArgumentException("ApiKey is required", nameof(settings));
-            }
-            _httpClient.DefaultRequestHeaders.Add("xi-api-key", _settings.ApiKey);
-            _httpClient.DefaultRequestHeaders.Add("Accept", "application/json");
+            ConfigureHttpClient();
         }
 
         /// <summary>
-        /// Initializes a new conversation with ElevenLabs
-        /// Handles authentication and WebSocket URL generation
+        /// Initializes a new conversation with the AI agent
+        /// Sets up initial context with provided variables
         /// </summary>
-        /// <param name="variables">Custom variables for the conversation</param>
-        /// <returns>A conversation ID for tracking</returns>
+        /// <param name="variables">Custom variables to configure the AI agent</param>
+        /// <returns>Conversation ID for subsequent interactions</returns>
         /// <exception cref="ArgumentNullException">When variables is null</exception>
         /// <exception cref="ElevenLabsApiException">When API request fails</exception>
         public async Task<string> InitializeConversationAsync(Dictionary<string, string> variables)
@@ -94,7 +83,7 @@ namespace ZEIage.Services
                     throw new ArgumentNullException(nameof(variables));
                 }
 
-                // Make an actual API call to initialize the conversation
+                // Create conversation with agent and variables
                 var request = new
                 {
                     agent_id = _settings.AgentId,
@@ -113,6 +102,11 @@ namespace ZEIage.Services
                         0,
                         "Null response from API");
                 }
+
+                _logger.LogInformation(
+                    "Initialized conversation {ConversationId} with variables: {@Variables}", 
+                    response.ConversationId, 
+                    variables);
 
                 return response.ConversationId;
             }
@@ -281,18 +275,25 @@ namespace ZEIage.Services
         }
 
         /// <summary>
-        /// Creates a WebSocket connection to ElevenLabs for real-time audio streaming
+        /// Creates a WebSocket connection for real-time audio streaming
+        /// Optionally initializes with variables
         /// </summary>
-        public async Task<WebSocket> ConnectWebSocket(string? conversationId = null, Dictionary<string, string>? variables = null)
+        /// <param name="conversationId">Optional conversation ID to connect to</param>
+        /// <param name="variables">Optional variables to initialize the conversation</param>
+        /// <returns>WebSocket connection to ElevenLabs</returns>
+        /// <exception cref="Exception">When connection fails</exception>
+        public async Task<WebSocket> ConnectWebSocket(
+            string? conversationId = null, 
+            Dictionary<string, string>? variables = null)
         {
             try
             {
-                // Create WebSocket client with proper options
+                // Configure WebSocket client
                 var ws = new ClientWebSocket();
                 ws.Options.KeepAliveInterval = TimeSpan.FromSeconds(30);
                 ws.Options.SetRequestHeader("xi-api-key", _settings.ApiKey);
 
-                // Build WebSocket URL
+                // Build WebSocket URL with optional conversation ID
                 var wsUrl = $"wss://api.elevenlabs.io/v1/convai/conversation?agent_id={_settings.AgentId}";
                 if (!string.IsNullOrEmpty(conversationId))
                 {
@@ -306,23 +307,7 @@ namespace ZEIage.Services
                 // Send initial variables if provided
                 if (variables != null && variables.Count > 0)
                 {
-                    var initMessage = new { type = "conversation_init", variables };
-                    var initMessageJson = JsonSerializer.Serialize(initMessage);
-                    var initMessageBytes = System.Text.Encoding.UTF8.GetBytes(initMessageJson);
-                    
-                    await ws.SendAsync(
-                        new ArraySegment<byte>(initMessageBytes),
-                        WebSocketMessageType.Text,
-                        true,
-                        CancellationToken.None);
-
-                    _logger.LogInformation("Sent initial variables to ElevenLabs WebSocket");
-
-                    // Wait for metadata response
-                    var buffer = new byte[4096];
-                    var result = await ws.ReceiveAsync(new ArraySegment<byte>(buffer), CancellationToken.None);
-                    var response = System.Text.Encoding.UTF8.GetString(buffer, 0, result.Count);
-                    _logger.LogInformation("Received WebSocket response: {Response}", response);
+                    await SendInitialVariables(ws, variables);
                 }
 
                 return ws;
@@ -332,6 +317,64 @@ namespace ZEIage.Services
                 _logger.LogError(ex, "Error connecting to ElevenLabs WebSocket");
                 throw;
             }
+        }
+
+        /// <summary>
+        /// Sends initial variables to configure the conversation
+        /// Waits for acknowledgment from ElevenLabs
+        /// </summary>
+        /// <param name="ws">WebSocket connection to ElevenLabs</param>
+        /// <param name="variables">Variables to initialize the conversation</param>
+        /// <exception cref="Exception">When sending variables fails</exception>
+        private async Task SendInitialVariables(
+            WebSocket ws, 
+            Dictionary<string, string> variables)
+        {
+            var initMessage = new { type = "conversation_init", variables };
+            var initMessageJson = JsonSerializer.Serialize(initMessage);
+            var initMessageBytes = System.Text.Encoding.UTF8.GetBytes(initMessageJson);
+            
+            await ws.SendAsync(
+                new ArraySegment<byte>(initMessageBytes),
+                WebSocketMessageType.Text,
+                true,
+                CancellationToken.None);
+
+            _logger.LogInformation("Sent initial variables: {@Variables}", variables);
+
+            // Wait for metadata response
+            var buffer = new byte[4096];
+            var result = await ws.ReceiveAsync(
+                new ArraySegment<byte>(buffer), 
+                CancellationToken.None);
+            
+            var response = System.Text.Encoding.UTF8.GetString(
+                buffer, 
+                0, 
+                result.Count);
+            
+            _logger.LogInformation("Received WebSocket response: {Response}", response);
+        }
+
+        private void ConfigureHttpClient()
+        {
+            var baseUrl = _settings.BaseUrl?.Trim().ToLower() ?? 
+                throw new ArgumentException("BaseUrl is required");
+            
+            if (!baseUrl.StartsWith("http"))
+            {
+                baseUrl = $"https://{baseUrl}";
+            }
+            
+            _httpClient.BaseAddress = new Uri(baseUrl);
+            
+            if (string.IsNullOrEmpty(_settings.ApiKey))
+            {
+                throw new ArgumentException("ApiKey is required");
+            }
+            
+            _httpClient.DefaultRequestHeaders.Add("xi-api-key", _settings.ApiKey);
+            _httpClient.DefaultRequestHeaders.Add("Accept", "application/json");
         }
     }
 } 
