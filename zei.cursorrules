@@ -1,0 +1,145 @@
+You are an expert .NET developer experienced in C#, ASP.NET Core, WebSockets, and API integrations. You are building an outbound calling system that uses Infobip's Voice API with Media Stream, ElevenLabs' Conversational AI, and Zoho CRM.
+
+## Project Overview
+
+The project is an outbound calling system that integrates Zoho CRM, Infobip, and ElevenLabs. The system initiates calls to leads in Zoho CRM, connects the call audio to an ElevenLabs AI agent, and updates Zoho CRM with the conversation details.
+
+## Workflow and Development Environment
+
+-   The application is developed using .NET (C#) and ASP.NET Core.
+-   Use Visual Studio or VS Code for running, debugging, and testing the application.
+-   Code editing, AI suggestions, and refactoring are done within Cursor AI.
+-   The application uses asynchronous programming (`async`/`await`) extensively.
+-   The application uses WebSockets for real-time audio streaming.
+-   The application integrates with external APIs: Infobip, ElevenLabs, and Zoho CRM.
+
+## .NET and C# Specific Guidelines
+
+-   Use C# 10+ features where appropriate (e.g., record types, pattern matching, top-level statements).
+-   Use asynchronous methods (`async`/`await`) for all I/O-bound operations (API calls, WebSocket communication, file I/O).
+-   Use `System.Net.WebSockets.ClientWebSocket` for WebSocket client connections (to ElevenLabs).
+-   Use `Microsoft.AspNetCore.WebSockets` for the WebSocket server that handles Infobip's Media Stream.
+-   Use `Newtonsoft.Json` (or `System.Text.Json`) for JSON serialization and deserialization.
+-   Use `Microsoft.Extensions.Hosting` to create a hosted service (`CallHandlingService`) that runs the core application logic in the background.
+-   Use `Microsoft.Extensions.Configuration` to manage configuration settings and environment variables. Load settings from `appsettings.json` and environment variables.
+-   Inject services using dependency injection.
+
+## Naming Conventions
+
+-   Use PascalCase for class names, method names, and public properties (e.g., `InfobipHelper`, `StartCallHandlingProcess`).
+-   Use camelCase for private fields and local variables (e.g., `_callStates`, `conversationId`).
+-   Prefix interface names with "I" (e.g., `IZohoService`, `IElevenLabsService`).
+-   Use descriptive names for variables, methods, and classes that clearly indicate their purpose.
+
+## Project Structure
+
+-   Organize the code into separate files/classes:
+    -   `Program.cs`: Main entry point, sets up the hosted service.
+    -   `InfobipHelper.cs`: Handles Infobip API interactions.
+    -   `ElevenLabsHelper.cs`: Handles ElevenLabs API interactions.
+    -   `ZohoHelper.cs`: Handles Zoho CRM API interactions.
+    -   `CallHandlingService.cs`: Implements `IHostedService`, manages the call handling logic, and orchestrates the other components.
+
+## Dependencies
+
+-   `Infobip.Api.SDK` (Infobip .NET SDK)
+-   `ElevenLabs.NET` (ElevenLabs .NET SDK)
+-   `Newtonsoft.Json`
+-   `Microsoft.Extensions.Hosting`
+-   `Microsoft.Extensions.Configuration`
+-   `Microsoft.Extensions.Configuration.EnvironmentVariables`
+-   `Microsoft.Extensions.Configuration.Json`
+-   `System.Net.WebSockets.Client`
+-   `Microsoft.AspNetCore.WebSockets`
+-   Zoho CRM SDK (e.g., `zcrmsdk`, if available and preferred)
+-   `NAudio` or other ulaw conversion library (if needed)
+
+## Infobip API Integration (`InfobipHelper.cs`)
+
+-   Use the `Infobip.Api.SDK` for interacting with the Infobip Voice API.
+-   Implement `InitializeInfobipClient()` to create and configure an `ApiClient` using the `Configuration` object and API key from environment variables.
+-   Implement `CreateInfobipCall()` to:
+    -   Create outbound calls using `CallsCallRequest`.
+    -   Dynamically construct the `mediaStream.url` using the `INFOBIP_MEDIA_STREAM_URL` environment variable:
+        -   Development (ngrok): `ws://localhost:8765/mediaStream/{conversationId}`
+        -   Production: `wss://<your-domain-name>/mediaStream/{conversationId}`
+    -   Set `mediaStream.protocol` to `"WS"`.
+    -   Include the `configuration_id` from the environment variables.
+    -   Use `CallClient` to make the asynchronous `CreateCallAsync` API call.
+-   Implement `CreateInfobipApplication()` to create Infobip application.
+-   Implement `LinkApplicationAndConfiguration()` to link Infobip application and voice configuration.
+-   Implement `UpdateInfobipApplicationWebhooks()` to update Infobip application with webhook configuration.
+
+## ElevenLabs API Integration (`ElevenLabsHelper.cs`)
+
+-   Use the `ElevenLabs.NET` SDK for interacting with the ElevenLabs API.
+-   Implement `StartElevenLabsConversation()` to:
+    -   Create an `ElevenLabsClient` using your API key.
+    -   Start a new conversation using `Agent.FromId()` and `agent.StartConversationAsync()`.
+    -   Pass initial data (lead's phone number, name, surname) in the request.
+-   Implement `GetConversationDetails()` to retrieve conversation details using `client.Betat.Conversational.GetConversationAsync()`.
+-   Implement `SendAudioToElevenLabs()` to send base64-encoded audio to ElevenLabs via WebSocket.
+-   Implement `ReceiveAudioFromElevenLabs()` to receive audio from ElevenLabs via WebSocket.
+-   Implement `SendInfobipCallIdToElevenLabs()` to send the Infobip `call_id` to ElevenLabs for correlation using a WebSocket message.
+
+## Zoho CRM API Integration (`ZohoHelper.cs`)
+
+-   Implement `GetLeadData()` to fetch lead details (phone number, name, surname) from Zoho CRM by `lead_id`.
+-   Implement `UpdateLeadInZoho()` to update a lead record with conversation details (transcript, extracted variables).
+-   Use a Zoho CRM SDK (if available) or make direct API calls using `HttpClient`.
+-   Handle Zoho CRM API authentication (OAuth 2.0).
+
+## WebSockets and Audio Handling
+
+-   Use `ClientWebSocket` (from `System.Net.WebSockets`) for the WebSocket client connecting to ElevenLabs.
+-   Use `Microsoft.AspNetCore.WebSockets` to create a WebSocket server to handle Infobip's Media Stream.
+-   Implement `HandleInfobipMediaStream()` in `CallHandlingService` to:
+    -   Accept incoming WebSocket connections from Infobip on the path `/mediaStream`.
+    -   Extract the `call_id` from HTTP headers
+    -   Receive `media` events (base64-encoded ulaw audio).
+    -   Forward the audio to ElevenLabs using `SendAudioToElevenLabs()`.
+-   Implement `HandleElevenLabsWebSocket()` in `CallHandlingService` to:
+    -   Establish a WebSocket connection to ElevenLabs for the specific conversation.
+    -   Send the Infobip `call_id` to ElevenLabs for correlation.
+    -   Receive audio from ElevenLabs using `ReceiveAudioFromElevenLabs()`.
+    -   Forward the audio to Infobip using `SendAudioToInfobip()`.
+-   Implement `SendAudioToInfobip()` to send base64-encoded audio to Infobip via the Media Stream WebSocket.
+-   If necessary, implement audio format conversion (e.g., using `NAudio` or a similar library) to convert between ulaw and the format required by ElevenLabs.
+
+## Call State Management
+
+-   Use a `ConcurrentDictionary` called `callStates` in `CallHandlingService` to store the state of active calls.
+-   The keys of the dictionary should be the Infobip `call_id`.
+-   The values should be objects containing:
+    -   The ElevenLabs `conversation_id`.
+    -   The `ClientWebSocket` object for the ElevenLabs WebSocket connection.
+    -   The `WebSocket` object for the Infobip Media Stream connection.
+
+## Error Handling and Validation
+
+-   Use `try...catch` blocks to handle exceptions in all API calls, WebSocket interactions, and audio processing logic.
+-   Log errors using a logging library (e.g., `Microsoft.Extensions.Logging`). Include relevant context like call IDs, conversation IDs, and timestamps.
+-   Handle specific exceptions like `HttpRequestException`, `WebSocketException`, and custom exceptions.
+-   Implement retry mechanisms with exponential backoff for API calls and WebSocket connections when appropriate.
+-   Validate data received from external sources (Infobip, ElevenLabs, Zoho CRM) to prevent unexpected errors.
+
+## ngrok (Development)
+
+-   During development, use `ngrok` to expose your local WebSocket server to the internet.
+-   Set `INFOBIP_MEDIA_STREAM_URL` to `ws://localhost:8765` in your `.env` file when using `ngrok`.
+-   Update your Infobip Calls Configuration with the temporary `ngrok` URL for webhooks.
+-   Remember that the `ngrok` URL changes each time you restart `ngrok` unless you have a paid `ngrok` account.
+
+## Testing
+
+-   Write unit tests for individual functions in your helper classes (`InfobipHelper`, `ElevenLabsHelper`, `ZohoHelper`).
+-   Write integration tests to test the interaction between components (e.g., starting a conversation and initiating a call).
+-   Write end-to-end tests to test the complete call flow, from triggering a call to updating Zoho CRM.
+
+## Documentation
+
+-   Document each function and class with clear docstrings, explaining the purpose, parameters, return values, and any exceptions raised.
+-   Provide a comprehensive `README.md` file that explains how to set up, configure, and run the application.
+
+
+

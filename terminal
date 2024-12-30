@@ -1,0 +1,29 @@
+# Check .NET SDK version
+dotnet --version
+
+# Create new web API project in current directory
+dotnet new webapi
+
+# Add required NuGet packages
+dotnet add package Microsoft.AspNetCore.WebSockets
+dotnet add package Newtonsoft.Json 
+
+# Create directories
+mkdir Models
+mkdir Services
+mkdir WebSockets
+mkdir Controllers 
+
+dotnet build
+dotnet run 
+
+# Test the call initiation endpoint
+curl -X POST https://localhost:7001/api/call/initiate \
+  -H "Content-Type: application/json" \
+  -d '{
+    "phoneNumber": "+385 1 5507 736",
+    "variables": {
+      "name": "Test User",
+      "purpose": "Testing the system"
+    }
+  }' 
