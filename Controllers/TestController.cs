@@ -7,6 +7,10 @@ using System.Threading.Tasks;
 
 namespace ZEIage.Controllers
 {
+    /// <summary>
+    /// Controller for testing voice call functionality
+    /// Provides endpoints for testing call initiation and webhook handling
+    /// </summary>
     [ApiController]
     [Route("api/[controller]")]
     public class TestController : ControllerBase
@@ -20,6 +24,10 @@ namespace ZEIage.Controllers
             _logger = logger;
         }
 
+        /// <summary>
+        /// Test endpoint for initiating a call with predefined parameters
+        /// Uses a test phone number and default conversation variables
+        /// </summary>
         [HttpPost("call")]
         public async Task<IActionResult> TestCall()
         {

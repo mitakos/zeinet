@@ -6,6 +6,9 @@ using ZEIage.Models;
 
 namespace ZEIage.Services
 {
+    /// <summary>
+    /// Configuration settings for Infobip service
+    /// </summary>
     public class InfobipSettings
     {
         public required string BaseUrl { get; set; }
@@ -16,6 +19,9 @@ namespace ZEIage.Services
         public required string WebhookUrl { get; set; }
     }
 
+    /// <summary>
+    /// Handles all interactions with Infobip's Voice API
+    /// </summary>
     public class InfobipService
     {
         private readonly HttpClient _httpClient;
@@ -23,24 +29,33 @@ namespace ZEIage.Services
         private readonly ILogger<InfobipService> _logger;
         private readonly string _webSocketBaseUrl;
 
-        public InfobipService(HttpClient httpClient, IOptions<InfobipSettings> settings, ILogger<InfobipService> logger, IConfiguration configuration)
+        public InfobipService(
+            HttpClient httpClient, 
+            IOptions<InfobipSettings> settings, 
+            ILogger<InfobipService> logger, 
+            IConfiguration configuration)
         {
             _httpClient = httpClient;
             _settings = settings.Value;
             _logger = logger;
             
             // Get the application's base URL for WebSocket
-            _webSocketBaseUrl = configuration["ApplicationUrl"] ?? "localhost:5133"; // Default for development
+            _webSocketBaseUrl = configuration["ApplicationUrl"] ?? "localhost:5133";
 
+            // Configure HTTP client
             _httpClient.BaseAddress = new Uri($"https://{_settings.BaseUrl}");
             _httpClient.DefaultRequestHeaders.Add("Authorization", $"App {_settings.ApiKey}");
             _httpClient.DefaultRequestHeaders.Add("Accept", "application/json");
         }
 
+        /// <summary>
+        /// Initiates an outbound call to the specified phone number
+        /// </summary>
         public async Task<string> InitiateCallAsync(string phoneNumber, string sessionId)
         {
             try
             {
+                // Prepare call request
                 var request = new
                 {
                     endpoint = new 
@@ -56,13 +71,15 @@ namespace ZEIage.Services
                     callsConfigurationId = _settings.CallsConfigurationId,
                     customData = new Dictionary<string, string>
                     {
-                        { "sessionId", sessionId }
+                        { "sessionId", sessionId },
+                        { "initiatedAt", DateTime.UtcNow.ToString("o") }
                     },
                     notifyUrl = _settings.WebhookUrl
                 };
 
                 _logger.LogInformation("Initiating call with request: {@Request}", request);
 
+                // Send request to Infobip
                 var response = await _httpClient.PostAsJsonAsync("/calls/1/calls", request);
                 var content = await response.Content.ReadAsStringAsync();
                 
@@ -73,6 +90,7 @@ namespace ZEIage.Services
                     throw new Exception($"Infobip API error: {response.StatusCode} - {content}");
                 }
 
+                // Parse response and return call ID
                 var result = await response.Content.ReadFromJsonAsync<InfobipCallResponse>();
                 return result?.Id ?? throw new Exception("Empty response from Infobip");
             }
@@ -83,13 +101,18 @@ namespace ZEIage.Services
             }
         }
 
+        /// <summary>
+        /// Establishes WebSocket connection for media streaming
+        /// </summary>
         public async Task ConnectToWebSocket(string callId)
         {
             try
             {
+                // Prepare WebSocket URL
                 var wsUrl = $"wss://{_webSocketBaseUrl}/api/websocket/connect/{callId}";
                 _logger.LogInformation("Connecting call {CallId} to WebSocket at {Url}", callId, wsUrl);
 
+                // Configure media stream request
                 var request = new
                 {
                     mediaStream = new
@@ -109,6 +132,7 @@ namespace ZEIage.Services
                     }
                 };
 
+                // Send request to connect WebSocket
                 var response = await _httpClient.PostAsJsonAsync($"/calls/1/calls/{callId}/connect", request);
                 var content = await response.Content.ReadAsStringAsync();
                 

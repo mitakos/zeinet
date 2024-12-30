@@ -33,3 +33,4 @@ C:\ZEIage\obj\Debug\net8.0\refint\ZEIage.dll
 C:\ZEIage\obj\Debug\net8.0\ZEIage.pdb
 C:\ZEIage\obj\Debug\net8.0\ZEIage.genruntimeconfig.cache
 C:\ZEIage\obj\Debug\net8.0\ref\ZEIage.dll
+C:\ZEIage\obj\Debug\net8.0\ZEIage.sourcelink.json

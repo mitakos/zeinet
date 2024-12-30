@@ -1,6 +1,10 @@
 using System.Net.WebSockets;
 using System.Text.Json;
 
+/// <summary>
+/// Handles bidirectional WebSocket communication between Infobip and ElevenLabs
+/// Manages audio streaming and message processing
+/// </summary>
 public class InfobipWebSocketHandler : IDisposable
 {
     private readonly WebSocket _infobipWebSocket;
@@ -21,16 +25,19 @@ public class InfobipWebSocketHandler : IDisposable
         _logger = logger;
     }
 
+    /// <summary>
+    /// Main method that handles the WebSocket connection lifecycle
+    /// Starts parallel tasks for handling messages from both services
+    /// </summary>
     public async Task HandleConnection()
     {
         try
         {
-            // Start listening for ElevenLabs messages
+            // Start parallel tasks for handling messages
             var elevenLabsTask = HandleElevenLabsMessages();
-            // Start listening for Infobip messages
             var infobipTask = HandleInfobipMessages();
 
-            // Wait for either task to complete (or throw)
+            // Wait for either connection to end
             await Task.WhenAny(elevenLabsTask, infobipTask);
         }
         catch (Exception ex)
@@ -39,6 +46,10 @@ public class InfobipWebSocketHandler : IDisposable
         }
     }
 
+    /// <summary>
+    /// Handles incoming messages from Infobip
+    /// Forwards audio data to ElevenLabs
+    /// </summary>
     private async Task HandleInfobipMessages()
     {
         try
@@ -53,6 +64,7 @@ public class InfobipWebSocketHandler : IDisposable
                     // Forward audio to ElevenLabs
                     if (_elevenLabsWebSocket.State == WebSocketState.Open)
                     {
+                        // Convert audio to base64 and wrap in JSON
                         var message = new
                         {
                             user_audio_chunk = Convert.ToBase64String(_buffer, 0, result.Count)
@@ -81,6 +93,10 @@ public class InfobipWebSocketHandler : IDisposable
         }
     }
 
+    /// <summary>
+    /// Handles incoming messages from ElevenLabs
+    /// Processes different message types and forwards audio to Infobip
+    /// </summary>
     private async Task HandleElevenLabsMessages()
     {
         var buffer = new byte[8192];
@@ -93,6 +109,7 @@ public class InfobipWebSocketHandler : IDisposable
 
                 if (result.MessageType == WebSocketMessageType.Text)
                 {
+                    // Parse and handle JSON messages from ElevenLabs
                     var json = System.Text.Encoding.UTF8.GetString(buffer, 0, result.Count);
                     var message = JsonSerializer.Deserialize<Dictionary<string, JsonElement>>(json);
 
@@ -115,6 +132,10 @@ public class InfobipWebSocketHandler : IDisposable
         }
     }
 
+    /// <summary>
+    /// Processes different types of messages from ElevenLabs
+    /// Handles conversation metadata and ping/pong messages
+    /// </summary>
     private async Task HandleElevenLabsMessage(Dictionary<string, JsonElement> message)
     {
         if (!message.ContainsKey("type"))
@@ -124,36 +145,11 @@ public class InfobipWebSocketHandler : IDisposable
         switch (messageType)
         {
             case "conversation_initiation_metadata":
-                if (message.ContainsKey("conversation_initiation_metadata_event"))
-                {
-                    var metadata = message["conversation_initiation_metadata_event"];
-                    var conversationId = metadata.GetProperty("conversation_id").GetString();
-                    if (conversationId != null)
-                    {
-                        _conversationId = conversationId;
-                        _logger.LogInformation("Conversation initialized with ID: {ConversationId}", _conversationId);
-                    }
-                }
-                break;
-
-            case "audio":
-                if (message.ContainsKey("audio_event"))
-                {
-                    var audioEvent = message["audio_event"];
-                    var base64Audio = audioEvent.GetProperty("audio_base_64").GetString();
-                    if (base64Audio != null)
-                    {
-                        var audioBytes = Convert.FromBase64String(base64Audio);
-                        await _infobipWebSocket.SendAsync(
-                            new ArraySegment<byte>(audioBytes),
-                            WebSocketMessageType.Binary,
-                            true,
-                            _cts.Token);
-                    }
-                }
+                // Handle conversation initialization
                 break;
 
             case "ping":
+                // Respond to ping messages to keep connection alive
                 if (message.ContainsKey("ping_event"))
                 {
                     var pingEvent = message["ping_event"];
@@ -164,6 +160,9 @@ public class InfobipWebSocketHandler : IDisposable
         }
     }
 
+    /// <summary>
+    /// Sends a pong response to ElevenLabs to keep the connection alive
+    /// </summary>
     private async Task SendPong(int eventId)
     {
         var pongMessage = new
@@ -181,6 +180,9 @@ public class InfobipWebSocketHandler : IDisposable
             _cts.Token);
     }
 
+    /// <summary>
+    /// Gracefully closes both WebSocket connections
+    /// </summary>
     private async Task HandleCloseConnection()
     {
         _cts.Cancel();

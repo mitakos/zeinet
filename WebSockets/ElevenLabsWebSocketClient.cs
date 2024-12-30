@@ -1,5 +1,9 @@
 using System.Net.WebSockets;
 
+/// <summary>
+/// Client for managing WebSocket connections to ElevenLabs
+/// Handles audio streaming and connection lifecycle
+/// </summary>
 public class ElevenLabsWebSocketClient : IDisposable
 {
     private readonly ClientWebSocket _webSocket;
@@ -7,6 +11,11 @@ public class ElevenLabsWebSocketClient : IDisposable
     private readonly string _conversationId;
     private bool _isConnected;
 
+    /// <summary>
+    /// Initializes a new WebSocket client for ElevenLabs
+    /// </summary>
+    /// <param name="conversationId">ID of the conversation to connect to</param>
+    /// <param name="logger">Logger for tracking connection status</param>
     public ElevenLabsWebSocketClient(string conversationId, ILogger<ElevenLabsWebSocketClient> logger)
     {
         _webSocket = new ClientWebSocket();
@@ -14,6 +23,10 @@ public class ElevenLabsWebSocketClient : IDisposable
         _logger = logger;
     }
 
+    /// <summary>
+    /// Establishes WebSocket connection to ElevenLabs
+    /// Starts background audio receiving task
+    /// </summary>
     public async Task ConnectAsync()
     {
         try
@@ -32,6 +45,10 @@ public class ElevenLabsWebSocketClient : IDisposable
         }
     }
 
+    /// <summary>
+    /// Sends audio data to ElevenLabs
+    /// </summary>
+    /// <param name="audioData">Raw audio data to send</param>
     public async Task SendAudioAsync(ArraySegment<byte> audioData)
     {
         if (!_isConnected) throw new InvalidOperationException("WebSocket is not connected");
@@ -47,9 +64,12 @@ public class ElevenLabsWebSocketClient : IDisposable
         }
     }
 
+    /// <summary>
+    /// Background task that continuously receives audio from ElevenLabs
+    /// </summary>
     private async Task ReceiveAudioLoop()
     {
-        var buffer = new byte[8192];
+        var buffer = new byte[8192]; // 8KB buffer for audio chunks
         try
         {
             while (_webSocket.State == WebSocketState.Open)
@@ -68,6 +88,9 @@ public class ElevenLabsWebSocketClient : IDisposable
         }
     }
 
+    /// <summary>
+    /// Cleans up WebSocket resources
+    /// </summary>
     public void Dispose()
     {
         _webSocket.Dispose();

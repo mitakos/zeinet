@@ -1,146 +1,163 @@
-# ZEI Voice Agent Project
+# ZEIage - Voice Call Integration
 
-A .NET application integrating Infobip for voice calls and ElevenLabs for conversational AI.
+Integration between Infobip Voice Calls and ElevenLabs Conversational AI.
 
-## Project Overview
+## Current Status
 
-This project implements a voice agent system that:
-- Initiates outbound calls via Infobip
-- Handles real-time audio streaming
-- Processes conversations using ElevenLabs AI
-- Manages WebSocket connections for audio streaming
+### ✅ Implemented Features
 
-## Project Structure 
-ZEIage/
-├── Controllers/
-│ ├── CallController.cs # Handles call initiation
-│ ├── InfobipWebhookController.cs # Handles Infobip webhooks
-│ ├── TestController.cs # Test endpoints
-│ └── WebSocketController.cs # WebSocket handling
-├── Models/
-│ └── InfobipModels.cs # Infobip response models
-├── Services/
-│ ├── InfobipService.cs # Infobip integration
-│ ├── ElevenLabsService.cs # ElevenLabs integration
-│ └── WebSocketManager.cs # WebSocket connection management
-└── appsettings.json # Configuration
+1. **Call Management**
+   - Call initiation with Infobip
+   - Session state tracking
+   - Event handling via webhooks
+   - Basic error handling
 
-## Prerequisites
+2. **ElevenLabs Integration**
+   - Conversation initialization
+   - Variable collection setup
+   - WebSocket connection handling
+   - Authentication flow
 
-- .NET 8.0 SDK
-- ngrok for webhook testing
-- Infobip account with:
-  - Voice enabled
-  - Media streaming enabled (contact Infobip support)
-- ElevenLabs account with Conversational AI access
+3. **Session Management**
+   - Active session tracking
+   - State transitions
+   - Variable storage
+   - Custom data handling
+
+4. **API Endpoints**
+   - `/api/call/initiate` - Start new calls
+   - `/api/call/session/{sessionId}` - Get session status
+   - `/api/conversation` - Manage conversations
+   - `/api/infobipwebhook/events` - Handle Infobip events
+
+### ⚠️ Pending Features
+
+1. **Media Streaming** (Awaiting Infobip Enable)
+   - Audio streaming between services
+   - Real-time transcription
+   - Voice response handling
+
+2. **Integration Features**
+   - Zoho CRM integration
+   - Enhanced variable collection
+   - Session cleanup mechanism
+   - Health monitoring
 
 ## Configuration
 
-Update `appsettings.json` with your credentials:
-json
+### Required Settings (appsettings.json)
+
+```json
 {
-"ApplicationUrl": "your-ngrok-url",
-"InfobipSettings": {
-"BaseUrl": "your-infobip-base-url",
-"ApiKey": "your-infobip-api-key",
-"PhoneNumber": "your-infobip-phone",
-"ApplicationId": "your-app-id",
-"CallsConfigurationId": "your-calls-config-id",
-"WebhookUrl": "your-webhook-url"
-},
-"ElevenLabsSettings": {
-"ApiKey": "your-elevenlabs-api-key",
-"BaseUrl": "https://api.elevenlabs.io",
-"AgentId": "your-agent-id"
+  "InfobipSettings": {
+    "BaseUrl": "api.infobip.com",
+    "ApiKey": "your-infobip-api-key",
+    "PhoneNumber": "+XXX",
+    "ApplicationId": "your-app-id",
+    "CallsConfigurationId": "your-config-id",
+    "WebhookUrl": "https://your-domain.com/api/infobipwebhook/events",
+    "MediaStreamingEnabled": true
+  },
+  "ElevenLabsSettings": {
+    "BaseUrl": "api.elevenlabs.io",
+    "ApiKey": "your-elevenlabs-api-key",
+    "AgentId": "your-agent-id",
+    "RequireAuthentication": true,
+    "AllowedHosts": [
+      "your-domain.com"
+    ]
+  }
 }
+```
 
+## Testing Without Media Streaming
 
-## Current Implementation Status
+You can test the following functionality while waiting for media streaming enablement:
 
-### Working Features ✅
-1. **Call Initiation**
-   - Successful outbound calls through Infobip
-   - Webhook URL configuration
-   - Call state management
+1. **Call Flow Testing**
+```powershell
+# Initiate a test call
+Invoke-WebRequest -Uri "http://localhost:5133/api/call/initiate" -Method POST -ContentType "application/json" -Body '{"phoneNumber": "+XXXXXXXXXXXXX", "variables": {"name": "Test User"}}'
 
-2. **ElevenLabs Integration**
-   - Signed WebSocket URL generation
-   - Conversation initialization
+# Check session status
+Invoke-WebRequest -Uri "http://localhost:5133/api/call/session/{sessionId}" -Method GET
+```
 
-3. **Webhook Handling**
-   - Infobip webhook processing
-   - Call state management
-   - Event logging
+2. **Conversation Testing**
+```powershell
+# Get all conversations
+Invoke-WebRequest -Uri "http://localhost:5133/api/conversation" -Method GET
 
-### Pending Features ❌
-1. **Media Streaming**
-   - Requires Infobip media streaming enablement
-   - WebSocket connection implementation
-   - Audio stream handling
+# Get conversation details
+Invoke-WebRequest -Uri "http://localhost:5133/api/conversation/{conversationId}" -Method GET
 
-2. **Conversation Management**
-   - Full conversation flow
-   - Audio streaming between services
-   - Call termination handling
+# Get conversation transcript
+Invoke-WebRequest -Uri "http://localhost:5133/api/conversation/{conversationId}/transcript" -Method GET
+```
 
-## Testing
+3. **Webhook Testing**
+```powershell
+# Test webhook accessibility
+Invoke-WebRequest -Uri "http://localhost:5133/api/infobipwebhook/test" -Method GET
 
-### Prerequisites
-1. Run the application:
-dotnet run
-2. Start ngrok:
-
-3. Update `appsettings.json` with the new ngrok URL
-
-### Test Commands
-
-1. Test webhook endpoint:
-powershell
-Invoke-WebRequest -Uri "https://your-ngrok-url/api/infobipwebhook/test" -Method GET
-
+# Simulate call events
+Invoke-WebRequest -Uri "http://localhost:5133/api/infobipwebhook/events" -Method POST -ContentType "application/json" -Body '{"id":"call-id","state":"ESTABLISHED"}'
+```
 
 ## Next Steps
 
-1. **Media Streaming Setup**
-   - Contact Infobip to enable media streaming
-   - Get media streaming configuration
-   - Update application settings
+1. **Critical Features**
+   - Implement initial audio cue mechanism
+   - Add WebSocket connection health checks
+   - Implement retry logic for failed connections
+   - Add session cleanup mechanism
 
-2. **WebSocket Implementation**
-   - Update WebSocket URL format
-   - Implement audio streaming
-   - Add error handling
+2. **Integration**
+   - Complete Zoho CRM integration
+   - Enhance variable collection
+   - Add monitoring and metrics
 
-3. **Conversation Flow**
-   - Implement conversation management
-   - Add audio streaming
-   - Handle call termination
+3. **Quality**
+   - Add comprehensive testing
+   - Complete documentation
+   - Add health endpoints
+   - Implement logging strategy
 
-## Troubleshooting
+## Architecture
 
-### Common Issues
-1. **500 Internal Server Error on WebSocket**
-   - Verify media streaming is enabled on Infobip
-   - Check WebSocket URL format
-   - Verify ngrok connection
+The application follows a service-oriented architecture with these key components:
 
-2. **Webhook Not Receiving Events**
-   - Verify ngrok is running
-   - Check webhook URL in settings
-   - Verify Infobip webhook configuration
+1. **Controllers**
+   - `CallController` - Manages call initiation and status
+   - `ConversationController` - Handles conversation data
+   - `InfobipWebhookController` - Processes Infobip events
+   - `WebSocketController` - Manages WebSocket connections
 
-## API Documentation
+2. **Services**
+   - `InfobipService` - Handles Infobip API interactions
+   - `ElevenLabsService` - Manages ElevenLabs integration
+   - `SessionManager` - Tracks active calls
+   - `ConversationUpdateService` - Background updates
 
-- [Infobip Voice API](https://www.infobip.com/docs/api/channels/voice)
-- [ElevenLabs WebSocket API](https://elevenlabs.io/docs/api-reference/websocket)
+3. **WebSocket Handlers**
+   - `InfobipWebSocketHandler` - Manages Infobip connections
+   - `ElevenLabsWebSocketClient` - Handles ElevenLabs streaming
 
-## Support
+## Development Setup
 
-For issues related to:
-- Infobip integration: Contact Infobip support
-- ElevenLabs integration: Contact ElevenLabs support
-- Application issues: Create a GitHub issue
+1. Clone the repository
+2. Copy `appsettings.json.template` to `appsettings.json`
+3. Fill in your API keys and configuration
+4. Run `dotnet build`
+5. Start the application with `dotnet run`
+
+## Contributing
+
+1. Create a feature branch
+2. Make your changes
+3. Add tests if applicable
+4. Submit a pull request
 
 ## License
 
-[Your License Here]
+This project is proprietary and confidential.

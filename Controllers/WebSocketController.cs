@@ -4,6 +4,10 @@ using ZEIage.Services;
 
 namespace ZEIage.Controllers
 {
+    /// <summary>
+    /// Controller that manages WebSocket connections between Infobip and ElevenLabs
+    /// Handles the bidirectional audio streaming between the services
+    /// </summary>
     [ApiController]
     [Route("api/[controller]")]
     public class WebSocketController : ControllerBase
@@ -22,6 +26,11 @@ namespace ZEIage.Controllers
             _elevenLabsService = elevenLabsService;
         }
 
+        /// <summary>
+        /// Endpoint that accepts WebSocket connections from Infobip
+        /// Creates a bridge between Infobip and ElevenLabs WebSocket connections
+        /// </summary>
+        /// <param name="callId">The ID of the active call</param>
         [HttpGet("connect/{callId}")]
         public async Task HandleWebSocket(string callId)
         {
@@ -31,15 +40,19 @@ namespace ZEIage.Controllers
                 return;
             }
 
+            // Accept the WebSocket connection from Infobip
             using var infobipWebSocket = await HttpContext.WebSockets.AcceptWebSocketAsync();
+            // Create a WebSocket connection to ElevenLabs
             using var elevenLabsWebSocket = await _elevenLabsService.CreateWebSocketConnectionAsync();
             
+            // Create a handler to manage both connections
             var handler = new InfobipWebSocketHandler(
                 infobipWebSocket,
                 elevenLabsWebSocket,
                 _loggerFactory.CreateLogger<InfobipWebSocketHandler>()
             );
 
+            // Start handling the bidirectional communication
             await handler.HandleConnection();
         }
     }
