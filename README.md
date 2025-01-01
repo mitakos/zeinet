@@ -125,139 +125,29 @@ You can test the following functionality while waiting for media streaming enabl
 1. **Call Flow Testing**
 ```powershell
 # Initiate a test call
-Invoke-WebRequest -Uri "http://localhost:5133/api/call/initiate" -Method POST -ContentType "application/json" -Body '{"phoneNumber": "+XXXXXXXXXXXXX", "variables": {"name": "Test User"}}'
-
-# Check session status
-Invoke-WebRequest -Uri "http://localhost:5133/api/call/session/{sessionId}" -Method GET
+Invoke-RestMethod -Uri "http://localhost:5133/api/test/call" -Method Post -ContentType "application/json" -Body '{"phoneNumber": "+YOUR_PHONE"}'
 ```
-
-2. **Conversation Testing**
-```powershell
-# Get all conversations
-Invoke-WebRequest -Uri "http://localhost:5133/api/conversation" -Method GET
-
-# Get conversation details
-Invoke-WebRequest -Uri "http://localhost:5133/api/conversation/{conversationId}" -Method GET
-
-# Get conversation transcript
-Invoke-WebRequest -Uri "http://localhost:5133/api/conversation/{conversationId}/transcript" -Method GET
-```
-
-3. **Webhook Testing**
-```powershell
-# Test webhook accessibility
-Invoke-WebRequest -Uri "http://localhost:5133/api/infobipwebhook/test" -Method GET
-
-# Simulate call events
-Invoke-WebRequest -Uri "http://localhost:5133/api/infobipwebhook/events" -Method POST -ContentType "application/json" -Body '{"id":"call-id","state":"ESTABLISHED"}'
-```
-
-## Next Steps
-
-1. **Critical Features**
-   - Implement initial audio cue mechanism
-   - Add WebSocket connection health checks
-   - Implement retry logic for failed connections
-   - Add session cleanup mechanism
-
-2. **Integration**
-   - Complete Zoho CRM integration
-   - Enhance variable collection
-   - Add monitoring and metrics
-
-3. **Quality**
-   - Add comprehensive testing
-   - Complete documentation
-   - Add health endpoints
-   - Implement logging strategy
-
-## Architecture
-
-The application follows a service-oriented architecture with these key components:
-
-1. **Controllers**
-   - `CallController` - Manages call initiation and status
-   - `ConversationController` - Handles conversation data
-   - `InfobipWebhookController` - Processes Infobip events
-   - `WebSocketController` - Manages WebSocket connections
-
-2. **Services**
-   - `InfobipService` - Handles Infobip API interactions
-   - `ElevenLabsService` - Manages ElevenLabs integration
-   - `SessionManager` - Tracks active calls
-   - `ConversationUpdateService` - Background updates
-
-3. **WebSocket Handlers**
-   - `InfobipWebSocketHandler` - Manages Infobip connections
-   - `ElevenLabsWebSocketClient` - Handles ElevenLabs streaming
-
-## Development Setup
-
-1. Clone the repository
-2. Copy `appsettings.json.template` to `appsettings.json`
-3. Fill in your API keys and configuration
-4. Run `dotnet build`
-5. Start the application with `dotnet run`
-
-## Contributing
-
-1. Create a feature branch
-2. Make your changes
-3. Add tests if applicable
-4. Submit a pull request
-
-## License
-
-This project is proprietary and confidential.
-
-## Technical Implementation
-
-### Core Components Status
-
-1. **Infobip Integration**
-   ```csharp
-   // Current implementation uses unified call ID approach
-   var callId = await _infobipService.InitiateCallAsync(phoneNumber);
-   var session = _sessionManager.CreateSession(callId, phoneNumber);
-   ```
-   - ✅ Call initiation with proper error handling
-   - ✅ Webhook handling for call states
-   - ✅ Media stream configuration ready
-   - ❌ Pending: Media streaming activation
 
 2. **ElevenLabs WebSocket**
-   ```csharp
-   // WebSocket connection with variables
-   var webSocket = await _elevenLabsService.ConnectWebSocket(
-       variables: new Dictionary<string, string> {
-           { "name", "User" },
-           { "phone", phoneNumber }
-       }
-   );
-   ```
-   - ✅ Connection establishment
-   - ✅ Initial variables passing
-   - ✅ Audio format configuration (8kHz, mono)
-   - ✅ Conversation state management
+```powershell
+# Test WebSocket connection
+Invoke-RestMethod -Uri "http://localhost:5133/api/test/websocket" -Method Get
+```
 
 3. **Session Management**
-   ```json
-   // Current session structure
-   {
-     "sessionId": "infobip-call-id",
-     "callId": "same-as-session",
-     "state": "ESTABLISHED",
-     "customData": {
-       "elevenlabsWebSocket": "connected"
-     }
-   }
-   ```
-   - ✅ Unified ID approach (using Infobip's call ID)
-   - ✅ State transitions
-   - ✅ Custom data storage
-   - ✅ Active monitoring
+```json
+// Current session structure
+{
+  "sessionId": "infobip-call-id",
+  "callId": "same-as-session",
+  "state": "ESTABLISHED",
+  "customData": {
+    "elevenlabsWebSocket": "connected"
+  }
+}
+```
 
-### Audio Flow (Ready for Testing)
+## Audio Flow (Ready for Testing)
 
 ```plaintext
 [Infobip Call] <-> [WebSocket] <-> [AudioStreamHandler] <-> [WebSocket] <-> [ElevenLabs]

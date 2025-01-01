@@ -1,95 +1,60 @@
 using System.Collections.Concurrent;
-using Microsoft.Extensions.Logging;
-using ZEIage.Models;
+using ZEIage.Models.Session;
+using ZEIage.Models.Infobip;
 
-namespace ZEIage.Services
+namespace ZEIage.Services;
+
+public class SessionManager
 {
-    /// <summary>
-    /// Manages active call sessions and their state
-    /// </summary>
-    public class SessionManager
+    private readonly ConcurrentDictionary<string, CallSession> _sessions = new();
+
+    public CallSession CreateSession(string callId, string phoneNumber, Dictionary<string, string>? variables = null)
     {
-        private readonly ConcurrentDictionary<string, CallSession> _sessions = new();
-        private readonly ILogger<SessionManager> _logger;
-
-        public SessionManager(ILogger<SessionManager> logger)
+        var session = new CallSession
         {
-            _logger = logger;
-        }
+            SessionId = callId,
+            CallId = callId,
+            PhoneNumber = phoneNumber,
+            State = InfobipCallState.CALL_RECEIVED,
+            Variables = variables ?? new Dictionary<string, string>(),
+            CreatedAt = DateTime.UtcNow
+        };
 
-        /// <summary>
-        /// Creates a new call session
-        /// </summary>
-        public CallSession CreateSession(string sessionId, string phoneNumber)
+        _sessions.TryAdd(session.SessionId, session);
+        return session;
+    }
+
+    public CallSession? GetSession(string sessionId)
+    {
+        _sessions.TryGetValue(sessionId, out var session);
+        return session;
+    }
+
+    public CallSession? GetSessionByCallId(string callId)
+    {
+        return _sessions.Values.FirstOrDefault(s => s.CallId == callId);
+    }
+
+    public void UpdateSession(string sessionId, Action<CallSession> updateAction)
+    {
+        if (_sessions.TryGetValue(sessionId, out var session))
         {
-            var session = new CallSession
-            {
-                SessionId = sessionId,
-                PhoneNumber = phoneNumber,
-                State = CallSessionState.Created,
-                StartTime = DateTime.UtcNow
-            };
-
-            if (!_sessions.TryAdd(sessionId, session))
-            {
-                throw new InvalidOperationException($"Session {sessionId} already exists");
-            }
-
-            _logger.LogInformation("Created session {SessionId} for {PhoneNumber}", sessionId, phoneNumber);
-            return session;
+            updateAction(session);
         }
+    }
 
-        /// <summary>
-        /// Updates an existing session
-        /// </summary>
-        public void UpdateSession(string sessionId, Action<CallSession> updateAction)
+    public void EndSession(string sessionId)
+    {
+        if (_sessions.TryGetValue(sessionId, out var session))
         {
-            if (_sessions.TryGetValue(sessionId, out var session))
-            {
-                updateAction(session);
-                _logger.LogDebug("Updated session {SessionId}", sessionId);
-            }
-            else
-            {
-                _logger.LogWarning("Session {SessionId} not found for update", sessionId);
-            }
+            session.State = InfobipCallState.CALL_FINISHED;
+            session.EndedAt = DateTime.UtcNow;
+            _sessions.TryRemove(sessionId, out _);
         }
+    }
 
-        /// <summary>
-        /// Gets a session by its ID
-        /// </summary>
-        public CallSession? GetSession(string sessionId)
-        {
-            return _sessions.TryGetValue(sessionId, out var session) ? session : null;
-        }
-
-        /// <summary>
-        /// Gets a session by its associated call ID
-        /// </summary>
-        public CallSession? GetSessionByCallId(string callId)
-        {
-            return _sessions.Values.FirstOrDefault(s => s.CallId == callId);
-        }
-
-        /// <summary>
-        /// Gets all sessions
-        /// </summary>
-        public IEnumerable<CallSession> GetAllSessions()
-        {
-            return _sessions.Values.ToList();
-        }
-
-        /// <summary>
-        /// Ends a session and calculates its duration
-        /// </summary>
-        public void EndSession(string sessionId)
-        {
-            if (_sessions.TryRemove(sessionId, out var session))
-            {
-                session.EndTime = DateTime.UtcNow;
-                session.State = CallSessionState.Ended;
-                _logger.LogInformation("Ended session {SessionId}", sessionId);
-            }
-        }
+    public IEnumerable<CallSession> GetAllSessions()
+    {
+        return _sessions.Values;
     }
 } 

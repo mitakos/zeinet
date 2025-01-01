@@ -3,6 +3,7 @@ using System.Net.WebSockets;
 using ZEIage.Services;
 using ZEIage.Models;
 using ZEIage.WebSockets;
+using Microsoft.Extensions.Logging;
 
 namespace ZEIage.Controllers
 {
@@ -14,17 +15,20 @@ namespace ZEIage.Controllers
     public class WebSocketController : ControllerBase
     {
         private readonly ILogger<WebSocketController> _logger;
+        private readonly ILoggerFactory _loggerFactory;
         private readonly ZEIage.Services.WebSocketManager _webSocketManager;
         private readonly ElevenLabsService _elevenLabsService;
         private readonly SessionManager _sessionManager;
 
         public WebSocketController(
             ILogger<WebSocketController> logger,
+            ILoggerFactory loggerFactory,
             ZEIage.Services.WebSocketManager webSocketManager,
             ElevenLabsService elevenLabsService,
             SessionManager sessionManager)
         {
             _logger = logger;
+            _loggerFactory = loggerFactory;
             _webSocketManager = webSocketManager;
             _elevenLabsService = elevenLabsService;
             _sessionManager = sessionManager;
@@ -61,13 +65,13 @@ namespace ZEIage.Controllers
                 var handler = new InfobipWebSocketHandler(
                     infobipWebSocket,
                     elevenLabsWebSocket,
-                    _logger);
+                    _loggerFactory.CreateLogger<InfobipWebSocketHandler>());
 
                 _webSocketManager.AddConnection(callId, handler);
 
                 try
                 {
-                    await handler.HandleConnection();
+                    await handler.HandleConnectionAsync();
                 }
                 finally
                 {

@@ -1,6 +1,7 @@
 using Microsoft.Extensions.Hosting;
 using ZEIage.Models;
 using ZEIage.Models.ElevenLabs;
+using ZEIage.Models.Infobip;
 
 namespace ZEIage.Services
 {
@@ -43,7 +44,7 @@ namespace ZEIage.Services
         private async Task UpdateActiveSessions(CancellationToken ct)
         {
             var activeSessions = _sessionManager.GetAllSessions()
-                .Where(s => s.State == CallSessionState.Established && !string.IsNullOrEmpty(s.ConversationId));
+                .Where(s => s.State == InfobipCallState.CALL_ESTABLISHED && !string.IsNullOrEmpty(s.ConversationId));
 
             foreach (var session in activeSessions)
             {

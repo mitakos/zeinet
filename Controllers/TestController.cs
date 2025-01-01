@@ -2,6 +2,7 @@ using Microsoft.AspNetCore.Mvc;
 using ZEIage.Services;
 using ZEIage.Models;
 using ZEIage.Models.ElevenLabs;
+using ZEIage.Models.Infobip;
 using System;
 using System.Collections.Generic;
 using System.Threading.Tasks;
@@ -38,60 +39,72 @@ namespace ZEIage.Controllers
         /// Uses a test phone number and default conversation variables
         /// </summary>
         [HttpPost("call")]
-        public async Task<IActionResult> TestCall([FromBody] TestCallRequest request)
+        public async Task<IActionResult> StartCall([FromBody] StartCallRequest request)
         {
+            _logger.LogInformation("StartCall called with phoneNumber: {PhoneNumber}", request.PhoneNumber);
+
+            if (!ModelState.IsValid)
+            {
+                _logger.LogError("Invalid model state: {ModelState}", ModelState);
+                return BadRequest(ModelState);
+            }
+
             try
             {
-                _logger.LogInformation("Starting test call to {PhoneNumber}", request.PhoneNumber);
+                // Validate phone number
+                if (request.PhoneNumber != "+385989821434")
+                {
+                    _logger.LogError("Invalid phone number. Expected: +385989821434, Got: {PhoneNumber}", request.PhoneNumber);
+                    return BadRequest("Invalid phone number. Please use +385989821434 for testing.");
+                }
 
-                // 1. Initiate the call first to get Infobip's ID
+                // Prepare test variables for ElevenLabs
+                var initialVariables = new Dictionary<string, string>
+                {
+                    { "name", "Test User" },
+                    { "company", "Test Company" },
+                    { "key_insight", "Test Insight" }
+                };
+
+                // 1. Connect to ElevenLabs WebSocket with variables
+                _logger.LogInformation("Connecting to ElevenLabs WebSocket");
+                var webSocket = await _elevenLabsService.ConnectWebSocket(variables: initialVariables);
+
+                if (webSocket.State != System.Net.WebSockets.WebSocketState.Open)
+                {
+                    _logger.LogError("Failed to connect to ElevenLabs WebSocket");
+                    return BadRequest("Failed to connect to ElevenLabs");
+                }
+
+                // 2. Now initiate the call with Infobip
                 _logger.LogInformation("Initiating Infobip call");
                 var callId = await _infobipService.InitiateCallAsync(request.PhoneNumber);
-                
+
                 if (string.IsNullOrEmpty(callId))
                 {
                     _logger.LogError("Failed to get call ID from Infobip");
                     return BadRequest("Failed to initiate call");
                 }
 
-                // 2. Create session using Infobip's call ID
+                // 3. Create session using Infobip's call ID
                 var session = _sessionManager.CreateSession(callId, request.PhoneNumber);
                 _logger.LogInformation("Created session with ID {SessionId} for call {CallId}", callId, callId);
 
-                // 3. Establish WebSocket connection with initial variables
-                var initialVariables = new Dictionary<string, string>
-                {
-                    { "name", "Test User" },
-                    { "phone", request.PhoneNumber }
-                };
-
-                var webSocket = await _elevenLabsService.ConnectWebSocket(variables: initialVariables);
-                _logger.LogInformation("Established WebSocket connection with ElevenLabs");
-
                 // Store WebSocket in session for later use
-                _sessionManager.UpdateSession(callId, s => 
+                _sessionManager.UpdateSession(callId, s =>
                 {
-                    s.CallId = callId; // Use Infobip's ID
-                    s.State = CallSessionState.Calling;
+                    s.CallId = callId;
+                    s.State = InfobipCallState.CALL_ESTABLISHED;
                     s.CustomData["elevenlabsWebSocket"] = "connected";
-                    s.ConversationId = s.CustomData.GetValueOrDefault("elevenlabsWebSocket", string.Empty);
+                    s.Variables = initialVariables;
                 });
 
-                _logger.LogInformation(
-                    "Call initiated successfully. SessionId: {SessionId}, CallId: {CallId}",
-                    callId, callId);
-
-                return Ok(new
-                {
-                    sessionId = callId,
-                    callId,
-                    message = "Test call initiated successfully"
-                });
+                return Ok(new { SessionId = session.SessionId, CallId = callId, Message = "Test call initiated successfully" });
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "Error initiating test call to {PhoneNumber}", request.PhoneNumber);
-                return StatusCode(500, new { error = "Internal server error", details = ex.Message });
+                _logger.LogError(ex, "Error in StartCall");
+                return StatusCode(500, "Internal server error");
             }
         }
 
@@ -134,10 +147,26 @@ namespace ZEIage.Controllers
                 return StatusCode(500, new { error = "Failed to hang up call", details = ex.Message });
             }
         }
+
+        [HttpGet("call/{callId}")]
+        public async Task<IActionResult> GetCallStatus(string callId)
+        {
+            var status = await _infobipService.GetCallStatusAsync(callId);
+            if (status == null)
+            {
+                return NotFound($"Call {callId} not found");
+            }
+            return Ok(status);
+        }
     }
 
     public class TestCallRequest
     {
         public string PhoneNumber { get; set; } = string.Empty;
+    }
+
+    public class StartCallRequest
+    {
+        public required string PhoneNumber { get; set; }
     }
 } 

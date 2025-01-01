@@ -4,6 +4,8 @@ using ZEIage.Services;
 using System.Buffers;
 using ZEIage.Models;
 using ZEIage.WebSockets;
+using ZEIage.Models.Infobip;
+using Microsoft.Extensions.Logging;
 
 namespace ZEIage.Controllers
 {
@@ -16,6 +18,7 @@ namespace ZEIage.Controllers
     public class MediaStreamController : ControllerBase
     {
         private readonly ILogger<MediaStreamController> _logger;
+        private readonly ILoggerFactory _loggerFactory;
         private readonly ZEIage.Services.WebSocketManager _webSocketManager;
         private readonly ElevenLabsService _elevenLabsService;
         private readonly SessionManager _sessionManager;
@@ -24,11 +27,13 @@ namespace ZEIage.Controllers
 
         public MediaStreamController(
             ILogger<MediaStreamController> logger,
+            ILoggerFactory loggerFactory,
             ZEIage.Services.WebSocketManager webSocketManager,
             ElevenLabsService elevenLabsService,
             SessionManager sessionManager)
         {
             _logger = logger;
+            _loggerFactory = loggerFactory;
             _webSocketManager = webSocketManager;
             _elevenLabsService = elevenLabsService;
             _sessionManager = sessionManager;
@@ -66,7 +71,7 @@ namespace ZEIage.Controllers
                 var handler = new InfobipWebSocketHandler(
                     infobipWebSocket,
                     elevenLabsWebSocket,
-                    _logger);
+                    _loggerFactory.CreateLogger<InfobipWebSocketHandler>());
 
                 // Add the connection to our manager
                 _webSocketManager.AddConnection(callId, handler);
@@ -205,7 +210,7 @@ namespace ZEIage.Controllers
 
         private async Task HandleWebSocketError(string callId, WebSocketException ex)
         {
-            _sessionManager.UpdateSession(callId, s => s.State = CallSessionState.Failed);
+            _sessionManager.UpdateSession(callId, s => s.State = InfobipCallState.CALL_FAILED);
             if (HttpContext.WebSockets.IsWebSocketRequest)
             {
                 var ws = await HttpContext.WebSockets.AcceptWebSocketAsync();
@@ -218,7 +223,7 @@ namespace ZEIage.Controllers
 
         private async Task HandleGeneralError(string callId)
         {
-            _sessionManager.UpdateSession(callId, s => s.State = CallSessionState.Failed);
+            _sessionManager.UpdateSession(callId, s => s.State = InfobipCallState.CALL_FAILED);
             if (HttpContext.WebSockets.IsWebSocketRequest)
             {
                 var ws = await HttpContext.WebSockets.AcceptWebSocketAsync();

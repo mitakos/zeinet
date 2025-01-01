@@ -13,7 +13,7 @@ using System.Reflection;
 [assembly: System.Reflection.AssemblyCompanyAttribute("ZEIage")]
 [assembly: System.Reflection.AssemblyConfigurationAttribute("Debug")]
 [assembly: System.Reflection.AssemblyFileVersionAttribute("1.0.0.0")]
-[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+1ec8711b4babbcfcebb377ae25fda3c9eb25cf80")]
+[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+3ad6cb633a4a594457cbec9e09a1a37254635635")]
 [assembly: System.Reflection.AssemblyProductAttribute("ZEIage")]
 [assembly: System.Reflection.AssemblyTitleAttribute("ZEIage")]
 [assembly: System.Reflection.AssemblyVersionAttribute("1.0.0.0")]

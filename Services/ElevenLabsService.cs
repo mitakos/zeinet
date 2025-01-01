@@ -171,24 +171,50 @@ namespace ZEIage.Services
         /// </summary>
         public async Task<string> GetSignedUrlAsync()
         {
-            if (string.IsNullOrEmpty(_settings.AgentId))
+            try
             {
-                throw new InvalidOperationException("AgentId is required for authentication");
-            }
+                if (string.IsNullOrEmpty(_settings.AgentId))
+                {
+                    throw new InvalidOperationException("AgentId is required for authentication");
+                }
 
-            var response = await SendRequestAsync<SignedUrlResponse>(
-                $"/v1/convai/conversation/get_signed_url?agent_id={_settings.AgentId}");
-            
-            if (response?.SignedUrl == null)
+                // Create a new request to ensure headers are set correctly
+                using var request = new HttpRequestMessage(HttpMethod.Get, 
+                    $"/v1/convai/conversation/get_signed_url?agent_id={_settings.AgentId}");
+
+                var response = await _httpClient.SendAsync(request);
+                var responseContent = await response.Content.ReadAsStringAsync();
+
+                if (!response.IsSuccessStatusCode)
+                {
+                    _logger.LogError("Failed to get signed URL. Status: {Status}, Response: {Response}", 
+                        response.StatusCode, responseContent);
+                    throw new ElevenLabsApiException(
+                        $"Failed to get signed URL: {response.StatusCode}",
+                        (int)response.StatusCode,
+                        responseContent);
+                }
+
+                var result = await response.Content.ReadFromJsonAsync<SignedUrlResponse>();
+                if (result?.SignedUrl == null)
+                {
+                    throw new ElevenLabsApiException(
+                        "No signed URL in response",
+                        (int)response.StatusCode,
+                        responseContent);
+                }
+
+                _logger.LogInformation("Retrieved signed WebSocket URL for agent {AgentId}", _settings.AgentId);
+                return result.SignedUrl;
+            }
+            catch (Exception ex) when (ex is not ElevenLabsApiException)
             {
+                _logger.LogError(ex, "Error getting signed URL");
                 throw new ElevenLabsApiException(
-                    "No signed URL in response",
+                    "Error getting signed URL",
                     0,
-                    "Empty signed_url field");
+                    ex.Message);
             }
-
-            _logger.LogInformation("Retrieved signed WebSocket URL for agent {AgentId}", _settings.AgentId);
-            return response.SignedUrl;
         }
 
         /// <summary>
@@ -210,22 +236,23 @@ namespace ZEIage.Services
             try
             {
                 method ??= HttpMethod.Get;
-                HttpResponseMessage response;
+                using var request = new HttpRequestMessage(method, endpoint);
+                
+                // Add API key header
+                request.Headers.Add("xi-api-key", _settings.ApiKey);
 
-                if (method == HttpMethod.Get)
+                if (data != null)
                 {
-                    response = await _httpClient.GetAsync(endpoint, cancellationToken);
-                }
-                else
-                {
-                    var content = data != null ? JsonContent.Create(data) : null;
-                    response = await _httpClient.PostAsync(endpoint, content, cancellationToken);
+                    request.Content = JsonContent.Create(data);
                 }
 
+                var response = await _httpClient.SendAsync(request, cancellationToken);
                 var responseContent = await response.Content.ReadAsStringAsync(cancellationToken);
                 
                 if (!response.IsSuccessStatusCode)
                 {
+                    _logger.LogError("API error: {Status}, Response: {Response}", 
+                        response.StatusCode, responseContent);
                     throw new ElevenLabsApiException(
                         $"ElevenLabs API error: {response.StatusCode}",
                         (int)response.StatusCode,
@@ -242,10 +269,19 @@ namespace ZEIage.Services
 
                 try
                 {
-                    return await response.Content.ReadFromJsonAsync<T>(cancellationToken: cancellationToken);
+                    var result = await response.Content.ReadFromJsonAsync<T>(cancellationToken: cancellationToken);
+                    if (result == null)
+                    {
+                        throw new ElevenLabsApiException(
+                            "Null response from ElevenLabs API",
+                            (int)response.StatusCode,
+                            responseContent);
+                    }
+                    return result;
                 }
                 catch (JsonException ex)
                 {
+                    _logger.LogError(ex, "JSON parsing error. Response: {Response}", responseContent);
                     throw new ElevenLabsApiException(
                         "Invalid JSON response from ElevenLabs API",
                         (int)response.StatusCode,
@@ -282,99 +318,93 @@ namespace ZEIage.Services
         /// <param name="variables">Optional variables to initialize the conversation</param>
         /// <returns>WebSocket connection to ElevenLabs</returns>
         /// <exception cref="Exception">When connection fails</exception>
-        public async Task<WebSocket> ConnectWebSocket(
-            string? conversationId = null, 
+        public async Task<ClientWebSocket> ConnectWebSocket(
+            string? conversationId = null,
             Dictionary<string, string>? variables = null)
         {
             try
             {
-                // Configure WebSocket client
+                _logger.LogInformation("Using ElevenLabs credentials - AgentId: {AgentId}", _settings.AgentId);
+
+                // 1. Get signed URL first
+                var signedUrl = await GetSignedUrlAsync();
+                _logger.LogInformation("Got signed WebSocket URL for agent {AgentId}", _settings.AgentId);
+
+                // 2. Create and configure WebSocket
                 var ws = new ClientWebSocket();
-                ws.Options.KeepAliveInterval = TimeSpan.FromSeconds(30);
-                ws.Options.SetRequestHeader("xi-api-key", _settings.ApiKey);
-
-                // Build WebSocket URL with optional conversation ID
-                var wsUrl = $"wss://api.elevenlabs.io/v1/convai/conversation?agent_id={_settings.AgentId}";
-                if (!string.IsNullOrEmpty(conversationId))
-                {
-                    wsUrl += $"&conversation_id={conversationId}";
-                }
-
-                // Connect to WebSocket
-                await ws.ConnectAsync(new Uri(wsUrl), CancellationToken.None);
+                
+                // No need to set xi-api-key header when using signed URL
+                await ws.ConnectAsync(new Uri(signedUrl), CancellationToken.None);
                 _logger.LogInformation("Connected to ElevenLabs WebSocket");
 
-                // Send initial variables if provided
+                // 3. Wait for conversation_initiation_metadata
+                var buffer = new byte[4096];
+                var result = await ws.ReceiveAsync(new ArraySegment<byte>(buffer), CancellationToken.None);
+                var initMessage = System.Text.Encoding.UTF8.GetString(buffer, 0, result.Count);
+                _logger.LogInformation("Received init message: {Message}", initMessage);
+
+                // 4. Send initial variables if provided
                 if (variables != null && variables.Count > 0)
                 {
-                    await SendInitialVariables(ws, variables);
+                    // According to docs, we need to send variables in this format
+                    var config = new
+                    {
+                        type = "client_variables",
+                        client_variables_event = new
+                        {
+                            variables = variables
+                        }
+                    };
+
+                    var configJson = JsonSerializer.Serialize(config);
+                    _logger.LogInformation("Sending variables message: {Message}", configJson);
+                    
+                    var configBytes = System.Text.Encoding.UTF8.GetBytes(configJson);
+                    await ws.SendAsync(
+                        new ArraySegment<byte>(configBytes),
+                        WebSocketMessageType.Text,
+                        true,
+                        CancellationToken.None);
+
+                    _logger.LogInformation("Sent initial variables: {@Variables}", variables);
                 }
 
                 return ws;
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "Error connecting to ElevenLabs WebSocket");
+                _logger.LogError(ex, "Failed to connect to ElevenLabs WebSocket");
                 throw;
             }
         }
 
-        /// <summary>
-        /// Sends initial variables to configure the conversation
-        /// Waits for acknowledgment from ElevenLabs
-        /// </summary>
-        /// <param name="ws">WebSocket connection to ElevenLabs</param>
-        /// <param name="variables">Variables to initialize the conversation</param>
-        /// <exception cref="Exception">When sending variables fails</exception>
-        private async Task SendInitialVariables(
-            WebSocket ws, 
-            Dictionary<string, string> variables)
-        {
-            var initMessage = new { type = "conversation_init", variables };
-            var initMessageJson = JsonSerializer.Serialize(initMessage);
-            var initMessageBytes = System.Text.Encoding.UTF8.GetBytes(initMessageJson);
-            
-            await ws.SendAsync(
-                new ArraySegment<byte>(initMessageBytes),
-                WebSocketMessageType.Text,
-                true,
-                CancellationToken.None);
-
-            _logger.LogInformation("Sent initial variables: {@Variables}", variables);
-
-            // Wait for metadata response
-            var buffer = new byte[4096];
-            var result = await ws.ReceiveAsync(
-                new ArraySegment<byte>(buffer), 
-                CancellationToken.None);
-            
-            var response = System.Text.Encoding.UTF8.GetString(
-                buffer, 
-                0, 
-                result.Count);
-            
-            _logger.LogInformation("Received WebSocket response: {Response}", response);
-        }
-
         private void ConfigureHttpClient()
         {
-            var baseUrl = _settings.BaseUrl?.Trim().ToLower() ?? 
-                throw new ArgumentException("BaseUrl is required");
-            
-            if (!baseUrl.StartsWith("http"))
+            if (string.IsNullOrEmpty(_settings.BaseUrl))
             {
-                baseUrl = $"https://{baseUrl}";
+                throw new ArgumentException("BaseUrl is required");
             }
-            
-            _httpClient.BaseAddress = new Uri(baseUrl);
+
+            _httpClient.BaseAddress = new Uri(_settings.BaseUrl);
             
             if (string.IsNullOrEmpty(_settings.ApiKey))
             {
                 throw new ArgumentException("ApiKey is required");
             }
+
+            if (string.IsNullOrEmpty(_settings.AgentId))
+            {
+                throw new ArgumentException("AgentId is required");
+            }
+
+            _logger.LogInformation("Configuring ElevenLabs client with BaseUrl: {BaseUrl}, AgentId: {AgentId}", 
+                _settings.BaseUrl, _settings.AgentId);
             
-            _httpClient.DefaultRequestHeaders.Add("xi-api-key", _settings.ApiKey);
-            _httpClient.DefaultRequestHeaders.Add("Accept", "application/json");
+            // Add API key header globally
+            if (!_httpClient.DefaultRequestHeaders.Contains("xi-api-key"))
+            {
+                _httpClient.DefaultRequestHeaders.Add("xi-api-key", _settings.ApiKey);
+            }
         }
     }
 } 

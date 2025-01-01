@@ -5,13 +5,27 @@ using ZEIage.WebSockets;
 using ZEIage.Models;
 using ZEIage.Models.ElevenLabs;
 using WebSocketManager = ZEIage.Services.WebSocketManager;
+using Microsoft.AspNetCore.HttpOverrides;
 
 var builder = WebApplication.CreateBuilder(args);
 
+// Configure forwarded headers for ngrok
+builder.Services.Configure<ForwardedHeadersOptions>(options =>
+{
+    options.ForwardedHeaders = ForwardedHeaders.XForwardedFor | ForwardedHeaders.XForwardedProto;
+    // Clear networks because we trust ngrok's proxy
+    options.KnownNetworks.Clear();
+    options.KnownProxies.Clear();
+});
+
 // Add services to the container.
 builder.Services.AddControllers();
-builder.Services.AddEndpointsApiExplorer();
-builder.Services.AddSwaggerGen();
+
+if (builder.Environment.IsDevelopment())
+{
+    builder.Services.AddEndpointsApiExplorer();
+    builder.Services.AddSwaggerGen();
+}
 
 // Configure CORS for development
 builder.Services.AddCors(options =>
@@ -24,25 +38,33 @@ builder.Services.AddCors(options =>
     });
 });
 
+// Configure JSON options
+builder.Services.AddControllers()
+    .AddJsonOptions(options =>
+    {
+        options.JsonSerializerOptions.PropertyNameCaseInsensitive = true;
+        options.JsonSerializerOptions.PropertyNamingPolicy = null;
+        options.JsonSerializerOptions.AllowTrailingCommas = true;
+        options.JsonSerializerOptions.ReadCommentHandling = System.Text.Json.JsonCommentHandling.Skip;
+    });
+
 // Configure services
 builder.Services.Configure<InfobipSettings>(builder.Configuration.GetSection("InfobipSettings"));
 builder.Services.Configure<ElevenLabsSettings>(builder.Configuration.GetSection("ElevenLabsSettings"));
 
-// Validate configuration
-var infobipSettings = builder.Configuration.GetSection("InfobipSettings").Get<InfobipSettings>();
-var elevenLabsSettings = builder.Configuration.GetSection("ElevenLabsSettings").Get<ElevenLabsSettings>();
-
-if (infobipSettings == null)
-{
-    throw new InvalidOperationException("InfobipSettings section is missing from configuration");
-}
-
-if (elevenLabsSettings == null)
-{
-    throw new InvalidOperationException("ElevenLabsSettings section is missing from configuration");
-}
-
+// Configure HTTP client
 builder.Services.AddHttpClient();
+
+// Configure request logging for development
+if (builder.Environment.IsDevelopment())
+{
+    builder.Services.AddHttpLogging(logging =>
+    {
+        logging.LoggingFields = Microsoft.AspNetCore.HttpLogging.HttpLoggingFields.All;
+    });
+}
+
+// Register services
 builder.Services.AddSingleton<InfobipService>();
 builder.Services.AddSingleton<ElevenLabsService>();
 builder.Services.AddSingleton<SessionManager>();
@@ -51,17 +73,30 @@ builder.Services.AddHostedService<ConversationUpdateService>();
 
 var app = builder.Build();
 
-// Configure the HTTP request pipeline.
+// Configure forwarded headers early in the pipeline
+app.UseForwardedHeaders();
+
+// Development specific middleware
 if (app.Environment.IsDevelopment())
 {
     app.UseSwagger();
     app.UseSwaggerUI();
+    // Don't redirect to HTTPS in development
+    app.Use((context, next) =>
+    {
+        context.Request.Scheme = "https";
+        return next();
+    });
+}
+else
+{
+    app.UseHttpsRedirection();
 }
 
-// Use CORS
+// Use CORS before other middleware
 app.UseCors();
 
-// Configure WebSocket middleware with development settings
+// Configure WebSocket middleware
 var webSocketOptions = new WebSocketOptions
 {
     KeepAliveInterval = TimeSpan.FromSeconds(120)
@@ -71,20 +106,5 @@ app.UseWebSockets(webSocketOptions);
 app.UseAuthorization();
 app.MapControllers();
 
-// Try different ports if default is taken
-var ports = new[] { 5133, 5134, 5135, 5136, 5137 };
-foreach (var port in ports)
-{
-    try
-    {
-        app.Urls.Clear();
-        app.Urls.Add($"http://localhost:{port}");
-        await app.RunAsync();
-        break;
-    }
-    catch (IOException) when (port != ports[^1])
-    {
-        Console.WriteLine($"Port {port} is in use, trying next port...");
-        continue;
-    }
-}
+// Start the application
+await app.RunAsync();
